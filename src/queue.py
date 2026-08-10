@@ -17,6 +17,8 @@ class RedisQueue:
         self.queue_name = queue_name
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
         self.queue_key = f"queue:{self.queue_name}"
+        self.delayed_queue_key = f"delayed_queue:{self.queue_name}"
+        self.failed_queue_key = f"failed_queue:{self.queue_name}"
 
     async def enqueue(self, task_payload: dict) -> str:
         """
@@ -34,7 +36,8 @@ class RedisQueue:
         task_data = {
             "id": task_id,
             "payload": serialized_payload,
-            "status": "PENDING"
+            "status": "PENDING",
+            "retry_count": 0
         }
 
         try:
@@ -166,8 +169,8 @@ class RedisQueue:
             await self.redis_client.rpush(self.queue_key, task_id)
             return True
         except redis.RedisError as e:
-            raise QueueError(f"Redis error retrying task: {e}")
-            
+            raise QueueError(f"Redis error updating task status: {e}")
+
     async def update_task_status(self, task_id: str, status: str):
         """
         Updates the status of a task.
@@ -177,6 +180,84 @@ class RedisQueue:
             await self.redis_client.hset(task_key, "status", status)
         except redis.RedisError as e:
             raise QueueError(f"Redis error updating task status: {e}")
+
+    async def fail_task(self, task_id: str, error_message: str, max_retries: int = 3, base_delay: int = 5):
+        """
+        Handles a task failure. If retries remain, calculates exponential backoff and puts in delayed queue.
+        Otherwise, moves it to the permanently failed queue.
+        """
+        task_key = f"task:{task_id}"
+        try:
+            task_data = await self.redis_client.hgetall(task_key)
+            if not task_data:
+                return
+
+            retry_count = int(task_data.get("retry_count", 0))
+            if retry_count < max_retries:
+                # Exponential backoff: base_delay * (2 ^ retry_count)
+                delay = base_delay * (2 ** retry_count)
+                import time
+                execute_at = time.time() + delay
+                
+                await self.redis_client.hset(task_key, mapping={
+                    "status": "PENDING",
+                    "retry_count": retry_count + 1,
+                    "error": error_message
+                })
+                # Add to delayed sorted set
+                await self.redis_client.zadd(self.delayed_queue_key, {task_id: execute_at})
+            else:
+                # Permanently failed
+                await self.redis_client.hset(task_key, mapping={
+                    "status": "FAILED",
+                    "error": error_message
+                })
+                await self.redis_client.rpush(self.failed_queue_key, task_id)
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error handling task failure: {e}")
+
+    async def poll_delayed_tasks(self):
+        """
+        Moves tasks from the delayed queue to the main queue if their time has come.
+        """
+        try:
+            import time
+            now = time.time()
+            # Fetch tasks with score <= now
+            tasks_to_enqueue = await self.redis_client.zrangebyscore(self.delayed_queue_key, 0, now)
+            
+            if tasks_to_enqueue:
+                # Use a pipeline to ensure atomicity for moving
+                async with self.redis_client.pipeline(transaction=True) as pipe:
+                    for task_id in tasks_to_enqueue:
+                        pipe.zrem(self.delayed_queue_key, task_id)
+                        pipe.rpush(self.queue_key, task_id)
+                    await pipe.execute()
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error polling delayed tasks: {e}")
+
+    async def retry_task(self, task_id: str) -> bool:
+        """
+        Retries a FAILED task manually via API.
+        """
+        task_key = f"task:{task_id}"
+        try:
+            status = await self.redis_client.hget(task_key, "status")
+            if status != "FAILED":
+                return False
+            
+            # Remove from failed queue list
+            await self.redis_client.lrem(self.failed_queue_key, 0, task_id)
+            
+            await self.redis_client.hset(task_key, mapping={
+                "status": "PENDING",
+                "retry_count": 0,
+                "error": ""
+            })
+            await self.redis_client.rpush(self.queue_key, task_id)
+            return True
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error retrying task: {e}")
 
     async def close(self):
         """

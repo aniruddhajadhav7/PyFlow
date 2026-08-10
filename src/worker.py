@@ -34,7 +34,7 @@ class Worker:
             logger.info(f"Task {task_id} completed successfully.")
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
-            await self.queue.update_task_status(task_id, "FAILED")
+            await self.queue.fail_task(task_id, str(e), max_retries=3, base_delay=5)
 
     async def _handle_task(self, task: dict):
         """
@@ -60,6 +60,9 @@ class Worker:
 
         try:
             while not self.shutdown_event.is_set():
+                # Poll for delayed tasks before dequeuing
+                await self.queue.poll_delayed_tasks()
+                
                 # We use a short sleep to prevent tight looping if dequeue is fast and empty
                 task = await self.queue.dequeue()
                 if task:
