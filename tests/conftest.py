@@ -1,15 +1,16 @@
-import pytest
 import pytest_asyncio
 import fakeredis.aioredis
 from httpx import AsyncClient, ASGITransport
 from src.main import app
 from src.queue import RedisQueue
 
+
 @pytest_asyncio.fixture
 async def fake_redis():
     client = fakeredis.aioredis.FakeRedis(decode_responses=True)
     yield client
-    await client.close()
+    await client.aclose()
+
 
 @pytest_asyncio.fixture
 async def queue(fake_redis):
@@ -17,6 +18,7 @@ async def queue(fake_redis):
     q.redis_client = fake_redis
     yield q
     # We don't call q.close() because it would close the fake_redis we yielded
+
 
 @pytest_asyncio.fixture
 async def client(queue):

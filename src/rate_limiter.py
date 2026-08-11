@@ -1,5 +1,4 @@
 import time
-from typing import Optional
 import redis.asyncio as redis
 
 # Lua script for atomic Token Bucket operation
@@ -38,6 +37,7 @@ redis.call("expire", key, math.ceil(window))
 return allowed
 """
 
+
 class BaseRateLimiter:
     def __init__(self, redis_client: redis.Redis, limit: int, window: int):
         self.redis = redis_client
@@ -47,21 +47,18 @@ class BaseRateLimiter:
     async def is_allowed(self, identifier: str) -> bool:
         raise NotImplementedError
 
+
 class TokenBucketRateLimiter(BaseRateLimiter):
     async def is_allowed(self, identifier: str) -> bool:
         key = f"ratelimit:tb:{identifier}"
         now = time.time()
-        
+
         # Execute Lua script
         allowed = await self.redis.eval(
-            TOKEN_BUCKET_SCRIPT,
-            1, # number of keys
-            key,
-            self.limit,
-            self.window,
-            now
+            TOKEN_BUCKET_SCRIPT, 1, key, self.limit, self.window, now  # number of keys
         )
         return bool(allowed)
+
 
 class SlidingWindowLogRateLimiter(BaseRateLimiter):
     async def is_allowed(self, identifier: str) -> bool:
@@ -78,15 +75,18 @@ class SlidingWindowLogRateLimiter(BaseRateLimiter):
             pipe.zcard(key)
             # Set expiry so we don't leak memory
             pipe.expire(key, self.window)
-            
+
             results = await pipe.execute()
-            
+
             # The count is the 3rd result (index 2)
             request_count = results[2]
-            
+
             return request_count <= self.limit
 
-def get_rate_limiter(redis_client: redis.Redis, algorithm: str, limit: int, window: int) -> BaseRateLimiter:
+
+def get_rate_limiter(
+    redis_client: redis.Redis, algorithm: str, limit: int, window: int
+) -> BaseRateLimiter:
     if algorithm == "sliding_window":
         return SlidingWindowLogRateLimiter(redis_client, limit, window)
     return TokenBucketRateLimiter(redis_client, limit, window)

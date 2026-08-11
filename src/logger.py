@@ -2,9 +2,10 @@ import logging
 import structlog
 from src.config import settings
 
+
 def setup_logging():
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    
+
     structlog.configure(
         processors=[
             structlog.stdlib.add_log_level,
@@ -18,18 +19,18 @@ def setup_logging():
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
-    
+
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=structlog.processors.JSONRenderer(),
     )
-    
+
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
-    
+
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)
     root_logger.setLevel(log_level)
-    
+
     # Uvicorn specific loggers
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(logger_name).handlers = [handler]

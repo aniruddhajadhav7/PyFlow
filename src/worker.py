@@ -1,11 +1,11 @@
 import asyncio
 import logging
 import signal
-from typing import Optional
-from src.queue import RedisQueue, TaskNotFoundError
+from src.queue import RedisQueue
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
 
 class Worker:
     def __init__(self, redis_url: str, queue_name: str = "default_queue"):
@@ -19,16 +19,16 @@ class Worker:
         """
         task_id = task.get("id")
         payload = task.get("payload", {})
-        
+
         logger.info(f"Processing task {task_id}...")
         try:
             # Simulate processing delay
             await asyncio.sleep(2)
-            
+
             # Simple simulation: if payload has a 'fail' key, we fail the task
             if payload.get("fail"):
                 raise ValueError("Simulated task failure.")
-            
+
             # On success
             await self.queue.update_task_status(task_id, "SUCCESS")
             logger.info(f"Task {task_id} completed successfully.")
@@ -52,7 +52,7 @@ class Worker:
         Main worker loop.
         """
         logger.info("Worker started. Waiting for tasks...")
-        
+
         # Setup signal handlers for graceful shutdown
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -62,7 +62,7 @@ class Worker:
             while not self.shutdown_event.is_set():
                 # Poll for delayed tasks before dequeuing
                 await self.queue.poll_delayed_tasks()
-                
+
                 # We use a short sleep to prevent tight looping if dequeue is fast and empty
                 task = await self.queue.dequeue()
                 if task:
@@ -78,11 +78,14 @@ class Worker:
         finally:
             logger.info("Worker shutting down...")
             if self.active_tasks:
-                logger.info(f"Waiting for {len(self.active_tasks)} active tasks to finish...")
+                logger.info(
+                    f"Waiting for {len(self.active_tasks)} active tasks to finish..."
+                )
                 await asyncio.gather(*self.active_tasks, return_exceptions=True)
-            
+
             await self.queue.close()
             logger.info("Worker shutdown complete.")
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
