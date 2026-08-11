@@ -1,4 +1,5 @@
 # PyFlow
+[![CI](https://github.com/aniruddhajadhav7/PyFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/aniruddhajadhav7/PyFlow/actions/workflows/ci.yml)
 
 PyFlow is a robust, production-ready asynchronous Python backend leveraging the speed and simplicity of **FastAPI**. Designed for high performance, it implements a custom task queue backed by **Redis**, an asynchronous background worker processing system, and essential production features like Lua-script-based rate limiting, structured logging, comprehensive testing, and built-in k6 load testing benchmarks.
 
