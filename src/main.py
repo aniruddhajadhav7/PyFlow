@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 import structlog
 from src.config import settings
 from src.logger import setup_logging
@@ -30,6 +30,11 @@ app.include_router(tasks.router)
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     logger.info("Health check endpoint called")
+    if hasattr(request.app.state, "queue"):
+        try:
+            await request.app.state.queue.redis_client.ping()
+        except Exception:
+            raise HTTPException(status_code=503, detail="Service Unavailable")
     return {"status": "ok", "app_name": settings.app_name}

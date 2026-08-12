@@ -33,4 +33,6 @@ def setup_logging():
 
     # Uvicorn specific loggers
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        logging.getLogger(logger_name).handlers = [handler]
+        uvicorn_logger = logging.getLogger(logger_name)
+        uvicorn_logger.handlers = [handler]
+        uvicorn_logger.propagate = False

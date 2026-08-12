@@ -42,10 +42,13 @@ class RedisQueue:
         }
 
         try:
-            # Store task data in Hash
-            await self.redis_client.hset(task_key, mapping=task_data)
-            # Push task ID to the list
-            await self.redis_client.rpush(self.queue_key, task_id)
+            import time
+            now = time.time()
+            async with self.redis_client.pipeline(transaction=True) as pipe:
+                pipe.hset(task_key, mapping=task_data)
+                pipe.rpush(self.queue_key, task_id)
+                pipe.zadd(f"tasks:created:{self.queue_name}", {task_id: now})
+                await pipe.execute()
             return task_id
         except redis.RedisError as e:
             raise QueueError(f"Redis error during enqueue: {e}")
@@ -127,17 +130,23 @@ class RedisQueue:
 
     async def list_tasks(self, limit: int = 50, offset: int = 0):
         """
-        Lists tasks by scanning for task keys.
+        Lists tasks by fetching from the creation index using ZRANGE, then pipeline HGETALL.
         """
         try:
             tasks = []
-            cursor, keys = await self.redis_client.scan(
-                cursor=0, match="task:*", count=1000
-            )
-            # Simplistic pagination (in a real app, use better pagination)
-            keys = keys[offset : offset + limit]
-            for key in keys:
-                task_data = await self.redis_client.hgetall(key)
+            zset_key = f"tasks:created:{self.queue_name}"
+            # ZRANGE is inclusive for start and end, so we use offset and offset + limit - 1
+            task_ids = await self.redis_client.zrange(zset_key, offset, offset + limit - 1)
+            
+            if not task_ids:
+                return []
+                
+            async with self.redis_client.pipeline(transaction=False) as pipe:
+                for task_id in task_ids:
+                    pipe.hgetall(f"task:{task_id}")
+                task_data_list = await pipe.execute()
+                
+            for task_data in task_data_list:
                 if task_data:
                     task_data["payload"] = json.loads(task_data.get("payload", "{}"))
                     tasks.append(task_data)
@@ -147,18 +156,25 @@ class RedisQueue:
 
     async def cancel_task(self, task_id: str) -> bool:
         """
-        Cancels a task if it is PENDING.
+        Cancels a task if it is PENDING using an atomic Lua script.
         """
         task_key = f"task:{task_id}"
+        script = """
+        local task_key = KEYS[1]
+        local queue_key = KEYS[2]
+        local task_id = ARGV[1]
+        local status = redis.call("HGET", task_key, "status")
+        if status == "PENDING" then
+            redis.call("LREM", queue_key, 0, task_id)
+            redis.call("HSET", task_key, "status", "FAILED")
+            return 1
+        else
+            return 0
+        end
+        """
         try:
-            status = await self.redis_client.hget(task_key, "status")
-            if status != "PENDING":
-                return False
-
-            # Remove from queue list
-            await self.redis_client.lrem(self.queue_key, 0, task_id)
-            await self.redis_client.hset(task_key, "status", "FAILED")
-            return True
+            result = await self.redis_client.eval(script, 2, task_key, self.queue_key, task_id)
+            return bool(result)
         except redis.RedisError as e:
             raise QueueError(f"Redis error cancelling task: {e}")
 
@@ -243,22 +259,27 @@ class RedisQueue:
 
     async def retry_task(self, task_id: str) -> bool:
         """
-        Retries a FAILED task manually via API.
+        Retries a FAILED task manually via API using an atomic Lua script.
         """
         task_key = f"task:{task_id}"
+        script = """
+        local task_key = KEYS[1]
+        local failed_queue_key = KEYS[2]
+        local queue_key = KEYS[3]
+        local task_id = ARGV[1]
+        local status = redis.call("HGET", task_key, "status")
+        if status == "FAILED" then
+            redis.call("LREM", failed_queue_key, 0, task_id)
+            redis.call("HSET", task_key, "status", "PENDING", "retry_count", 0, "error", "")
+            redis.call("RPUSH", queue_key, task_id)
+            return 1
+        else
+            return 0
+        end
+        """
         try:
-            status = await self.redis_client.hget(task_key, "status")
-            if status != "FAILED":
-                return False
-
-            # Remove from failed queue list
-            await self.redis_client.lrem(self.failed_queue_key, 0, task_id)
-
-            await self.redis_client.hset(
-                task_key, mapping={"status": "PENDING", "retry_count": 0, "error": ""}
-            )
-            await self.redis_client.rpush(self.queue_key, task_id)
-            return True
+            result = await self.redis_client.eval(script, 3, task_key, self.failed_queue_key, self.queue_key, task_id)
+            return bool(result)
         except redis.RedisError as e:
             raise QueueError(f"Redis error retrying task: {e}")
 

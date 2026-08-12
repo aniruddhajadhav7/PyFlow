@@ -15,7 +15,7 @@ def get_queue(request: Request) -> RedisQueue:
     return request.app.state.queue
 
 
-@router.post("/", response_model=TaskResponse)
+@router.post("/", response_model=TaskResponse, status_code=201)
 async def submit_task(
     request: TaskSubmitRequest, queue: RedisQueue = Depends(get_queue)
 ):
@@ -47,7 +47,7 @@ async def retrieve_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
     return task_data
 
 
-@router.post("/{task_id}/cancel", response_model=TaskMessageResponse)
+@router.delete("/{task_id}", response_model=TaskMessageResponse)
 async def cancel_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
     """Cancel a pending task."""
     success = await queue.cancel_task(str(task_id))

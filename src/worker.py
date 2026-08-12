@@ -88,7 +88,8 @@ class Worker:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from src.logger import setup_logging
+    setup_logging()
     worker = Worker(redis_url=settings.redis_url)
     try:
         asyncio.run(worker.run())

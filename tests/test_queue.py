@@ -97,3 +97,22 @@ async def test_retry_task(queue):
 
     length = await queue.queue_length()
     assert length == 1
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_pagination(queue):
+    import asyncio
+    # Enqueue multiple tasks
+    for i in range(5):
+        await queue.enqueue({"task": i})
+        await asyncio.sleep(0.01)  # ensure different timestamps
+
+    tasks_page_1 = await queue.list_tasks(limit=2, offset=0)
+    assert len(tasks_page_1) == 2
+    
+    tasks_page_2 = await queue.list_tasks(limit=2, offset=2)
+    assert len(tasks_page_2) == 2
+    assert tasks_page_1[0]["id"] != tasks_page_2[0]["id"]
+    
+    tasks_page_3 = await queue.list_tasks(limit=2, offset=4)
+    assert len(tasks_page_3) == 1
