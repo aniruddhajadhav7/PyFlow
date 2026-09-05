@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from typing import Callable, Dict, Any
 from src.queue import RedisQueue
 from src.config import settings
 
@@ -12,22 +13,35 @@ class Worker:
         self.queue = RedisQueue(redis_url=redis_url, queue_name=queue_name)
         self.shutdown_event = asyncio.Event()
         self.active_tasks = set()
+        self.task_registry: Dict[str, Callable] = {}
+
+    def task(self, task_name: str):
+        """
+        Decorator to register a task handler.
+        """
+        def decorator(func: Callable):
+            self.task_registry[task_name] = func
+            return func
+        return decorator
 
     async def _process_task(self, task: dict):
         """
-        Simulated task processing logic.
+        Looks up the task handler and executes it.
         """
         task_id = task.get("id")
+        task_name = task.get("task_name")
         payload = task.get("payload", {})
 
-        logger.info(f"Processing task {task_id}...")
+        logger.info(f"Processing task {task_id} (type: {task_name})...")
         try:
-            # Simulate processing delay
-            await asyncio.sleep(2)
+            handler = self.task_registry.get(task_name)
+            if not handler:
+                raise ValueError(f"No handler registered for task type: '{task_name}'")
 
-            # Simple simulation: if payload has a 'fail' key, we fail the task
-            if payload.get("fail"):
-                raise ValueError("Simulated task failure.")
+            if asyncio.iscoroutinefunction(handler):
+                await handler(payload)
+            else:
+                handler(payload)
 
             # On success
             await self.queue.update_task_status(task_id, "SUCCESS")
@@ -91,6 +105,12 @@ if __name__ == "__main__":
     from src.logger import setup_logging
     setup_logging()
     worker = Worker(redis_url=settings.redis_url)
+
+    @worker.task("test_task")
+    async def handle_test_task(payload):
+        logger.info(f"Test task executed with payload: {payload}")
+        await asyncio.sleep(1)
+
     try:
         asyncio.run(worker.run())
     except KeyboardInterrupt:

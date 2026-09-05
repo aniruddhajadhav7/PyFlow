@@ -21,10 +21,13 @@ class RedisQueue:
         self.delayed_queue_key = f"delayed_queue:{self.queue_name}"
         self.failed_queue_key = f"failed_queue:{self.queue_name}"
 
-    async def enqueue(self, task_payload: dict) -> str:
+    async def enqueue(self, task_name: str, task_payload: dict = None) -> str:
         """
         Enqueues a task and returns its unique task_id.
         """
+        if task_payload is None:
+            task_payload = {}
+
         task_id = str(uuid.uuid4())
         task_key = f"task:{task_id}"
 
@@ -36,6 +39,7 @@ class RedisQueue:
 
         task_data = {
             "id": task_id,
+            "task_name": task_name,
             "payload": serialized_payload,
             "status": "PENDING",
             "retry_count": 0,

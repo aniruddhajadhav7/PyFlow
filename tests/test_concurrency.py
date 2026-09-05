@@ -8,7 +8,7 @@ async def test_concurrent_enqueue(queue):
     num_tasks = 100
 
     # Enqueue tasks concurrently
-    tasks = [queue.enqueue({"id": i}) for i in range(num_tasks)]
+    tasks = [queue.enqueue("concurrent_test", {"id": i}) for i in range(num_tasks)]
     await asyncio.gather(*tasks)
 
     length = await queue.queue_length()
@@ -31,13 +31,13 @@ async def test_concurrent_api_requests(client: AsyncClient):
 
     # We will spam the API concurrently
     tasks = [
-        client.post("/tasks/", json={"payload": {"req": i}})
+        client.post("/tasks/", json={"task_name": "concurrent_api", "payload": {"req": i}})
         for i in range(num_requests)
     ]
     responses = await asyncio.gather(*tasks)
 
     for resp in responses:
-        assert resp.status_code == 200
+        assert resp.status_code == 201
 
     # Check that all tasks are listed
     list_resp = await client.get("/tasks/?limit=100")

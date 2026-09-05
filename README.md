@@ -16,6 +16,7 @@ While building scalable Python web applications, integrating background task pro
 
 - **FastAPI Core:** High-performance, asynchronous web API.
 - **Custom Redis Queue:** Fully async, lightweight task queue supporting enqueue, dequeue, peek, and delayed execution.
+- **Dynamic Task Registry:** Decorator-based handler registration (`@worker.task("name")`) for scalable task routing.
 - **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
 - **Resilient Retry Mechanism:** Exponential backoff for failed tasks with automated delayed requeuing and permanent failure states.
@@ -44,8 +45,9 @@ graph TD;
     API -->|Fetch Status| Redis;
     
     subgraph Background Processing
-        Redis -->|Dequeue Task| Worker[Asyncio Worker Pool];
-        Worker -->|Process| TaskEngine[Task Processor];
+        Redis -->|Dequeue Task| Worker[Asyncio Worker Pool]
+        Worker -->|Lookup Handler| Registry[Task Registry]
+        Registry -->|Process| TaskEngine[Task Processor]
         TaskEngine -->|Success| Redis;
         TaskEngine -.->|Failure & Retry w/ Backoff| Redis;
         TaskEngine -.->|Max Retries Reached| FailedQueue[(Failed Tasks)];
@@ -105,7 +107,7 @@ Once the application is running, an interactive Swagger UI is available at `/doc
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Check API health and configuration. |
-| `POST` | `/tasks/` | Submit a new task payload to the queue. |
+| `POST` | `/tasks/` | Submit a new task (requires `task_name` and `payload`) to the queue. |
 | `GET` | `/tasks/` | List existing tasks in the queue with pagination. |
 | `GET` | `/tasks/{task_id}` | Retrieve the current status and payload of a specific task. |
 | `POST` | `/tasks/{task_id}/cancel`| Cancel a pending task before execution. |

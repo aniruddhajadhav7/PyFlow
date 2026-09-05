@@ -17,7 +17,11 @@ async def worker(queue):
 @pytest.mark.asyncio
 @patch("src.worker.asyncio.sleep", return_value=None)
 async def test_worker_process_success(mock_sleep, worker, queue):
-    task_id = await queue.enqueue({"data": "success_task"})
+    @worker.task("success_task")
+    def handle_success(payload):
+        pass
+
+    task_id = await queue.enqueue("success_task", {"data": "success_task"})
 
     # Dequeue manually and process
     task = await queue.dequeue()
@@ -30,7 +34,11 @@ async def test_worker_process_success(mock_sleep, worker, queue):
 @pytest.mark.asyncio
 @patch("src.worker.asyncio.sleep", return_value=None)
 async def test_worker_process_failure(mock_sleep, worker, queue):
-    task_id = await queue.enqueue({"fail": True})
+    @worker.task("failing_task")
+    def handle_fail(payload):
+        raise ValueError("Simulated task failure.")
+
+    task_id = await queue.enqueue("failing_task", {"fail": True})
 
     task = await queue.dequeue()
     await worker._process_task(task)

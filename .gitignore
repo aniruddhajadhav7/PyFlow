@@ -41,3 +41,6 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+
+# Local to-do/improvements
+IMPROVEMENTS.md

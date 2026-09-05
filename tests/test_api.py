@@ -5,7 +5,7 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_submit_task(client: AsyncClient):
     payload = {"task": "from_api"}
-    response = await client.post("/tasks/", json={"payload": payload})
+    response = await client.post("/tasks/", json={"task_name": "test_api", "payload": payload})
 
     assert response.status_code == 201
     data = response.json()
@@ -17,8 +17,8 @@ async def test_submit_task(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_list_tasks(client: AsyncClient):
     # submit 2 tasks
-    await client.post("/tasks/", json={"payload": {"task": 1}})
-    await client.post("/tasks/", json={"payload": {"task": 2}})
+    await client.post("/tasks/", json={"task_name": "test_list", "payload": {"task": 1}})
+    await client.post("/tasks/", json={"task_name": "test_list", "payload": {"task": 2}})
 
     response = await client.get("/tasks/")
     assert response.status_code == 200
@@ -29,7 +29,7 @@ async def test_list_tasks(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_retrieve_task(client: AsyncClient):
-    submit_resp = await client.post("/tasks/", json={"payload": {"task": "retrieve"}})
+    submit_resp = await client.post("/tasks/", json={"task_name": "test_retrieve", "payload": {"task": "retrieve"}})
     task_id = submit_resp.json()["id"]
 
     response = await client.get(f"/tasks/{task_id}")
@@ -41,7 +41,7 @@ async def test_retrieve_task(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_cancel_task(client: AsyncClient):
-    submit_resp = await client.post("/tasks/", json={"payload": {"task": "cancel"}})
+    submit_resp = await client.post("/tasks/", json={"task_name": "test_cancel", "payload": {"task": "cancel"}})
     task_id = submit_resp.json()["id"]
 
     response = await client.delete(f"/tasks/{task_id}")
@@ -53,7 +53,7 @@ async def test_cancel_task(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_retry_task(client: AsyncClient, queue):
     # Enqueue a task manually and fail it so we can retry via API
-    task_id = await queue.enqueue({"task": "retry"})
+    task_id = await queue.enqueue("test_retry", {"task": "retry"})
     await queue.dequeue()
     await queue.fail_task(task_id, "error", max_retries=0)
 
