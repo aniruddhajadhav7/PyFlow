@@ -123,6 +123,7 @@ The application is configured using standard environment variables:
 - `DEBUG`: Enable/disable debug mode (`True` / `False`).
 - `LOG_LEVEL`: Logging verbosity (e.g., `INFO`, `DEBUG`).
 - `REDIS_URL`: Full connection string for the Redis broker (e.g., `redis://redis:6379/0`).
+- `WORKER_CONCURRENCY`: Maximum number of concurrent tasks a worker will process (Default: `100`).
 
 ---
 

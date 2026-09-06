@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 100
     rate_limit_window: int = 60  # in seconds
 
+    # Worker Settings
+    worker_concurrency: int = 100
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

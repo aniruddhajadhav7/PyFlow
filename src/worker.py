@@ -9,11 +9,12 @@ logger = logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self, redis_url: str, queue_name: str = "default_queue"):
+    def __init__(self, redis_url: str, queue_name: str = "default_queue", max_concurrent_tasks: int = 100):
         self.queue = RedisQueue(redis_url=redis_url, queue_name=queue_name)
         self.shutdown_event = asyncio.Event()
         self.active_tasks = set()
         self.task_registry: Dict[str, Callable] = {}
+        self.max_concurrent_tasks = max_concurrent_tasks
 
     def task(self, task_name: str):
         """
@@ -60,6 +61,7 @@ class Worker:
             await self._process_task(task)
         finally:
             self.active_tasks.discard(task_obj)
+            self.semaphore.release()
 
     async def run(self):
         """
@@ -72,18 +74,26 @@ class Worker:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self.shutdown_event.set)
 
+        self.semaphore = asyncio.Semaphore(self.max_concurrent_tasks)
+
         try:
             while not self.shutdown_event.is_set():
                 # Poll for delayed tasks before dequeuing
                 await self.queue.poll_delayed_tasks()
 
-                # We use a short sleep to prevent tight looping if dequeue is fast and empty
+                # Wait for capacity, allowing shutdown check every second
+                try:
+                    await asyncio.wait_for(self.semaphore.acquire(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
                 task = await self.queue.dequeue()
                 if task:
                     logger.info(f"Dequeued task {task['id']}")
                     # Run task asynchronously without blocking the consumer loop
                     asyncio.create_task(self._handle_task(task))
                 else:
+                    self.semaphore.release()
                     # Queue is empty, wait a bit before polling again
                     try:
                         await asyncio.wait_for(self.shutdown_event.wait(), timeout=1.0)
@@ -104,7 +114,10 @@ class Worker:
 if __name__ == "__main__":
     from src.logger import setup_logging
     setup_logging()
-    worker = Worker(redis_url=settings.redis_url)
+    worker = Worker(
+        redis_url=settings.redis_url,
+        max_concurrent_tasks=settings.worker_concurrency
+    )
 
     @worker.task("test_task")
     async def handle_test_task(payload):
