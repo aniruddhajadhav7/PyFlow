@@ -20,6 +20,7 @@ While building scalable Python web applications, integrating background task pro
 - **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
 - **Resilient Retry Mechanism:** Exponential backoff for failed tasks with automated delayed requeuing and permanent failure states.
+- **Task Result Storage & TTL Expiration:** Tasks can return results, which are stored in Redis with an automated Time-to-Live (TTL) configuration to prevent indefinite memory consumption.
 - **Structured Logging:** Context-rich JSON logging using `structlog`.
 - **Robust Test Suite:** Fast and comprehensive testing using `pytest` and mocked Redis clients.
 - **Production Benchmarked:** Included `k6` load testing scripts to validate throughput and latency.
@@ -75,9 +76,9 @@ A task in PyFlow flows through the following states:
 
 1. **`PENDING`**: Task is enqueued and waiting to be picked up by a worker.
 2. **`RUNNING`**: Worker has dequeued the task and is actively processing it.
-3. **`SUCCESS`**: Task completed without errors.
+3. **`SUCCESS`**: Task completed without errors. The returned result is stored, and the task record is scheduled for expiration via TTL to free memory.
 4. **`FAILED` (Temporary)**: Task encountered an exception. The worker calculates an exponential backoff delay, updates the retry count, sets status back to `PENDING`, and places it in the delayed queue.
-5. **`FAILED` (Permanent)**: Task has exceeded the maximum number of retries and is moved to a dead-letter queue.
+5. **`FAILED` (Permanent)**: Task has exceeded the maximum number of retries and is moved to a dead-letter queue, where it also expires according to the configured TTL.
 
 ---
 
@@ -124,6 +125,7 @@ The application is configured using standard environment variables:
 - `LOG_LEVEL`: Logging verbosity (e.g., `INFO`, `DEBUG`).
 - `REDIS_URL`: Full connection string for the Redis broker (e.g., `redis://redis:6379/0`).
 - `WORKER_CONCURRENCY`: Maximum number of concurrent tasks a worker will process (Default: `100`).
+- `TASK_RESULT_TTL`: Time-To-Live in seconds for completed or failed task records in Redis (Default: `86400`).
 
 ---
 

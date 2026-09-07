@@ -40,16 +40,16 @@ class Worker:
                 raise ValueError(f"No handler registered for task type: '{task_name}'")
 
             if asyncio.iscoroutinefunction(handler):
-                await handler(payload)
+                result = await handler(payload)
             else:
-                handler(payload)
+                result = handler(payload)
 
             # On success
-            await self.queue.update_task_status(task_id, "SUCCESS")
+            await self.queue.update_task_status(task_id, "SUCCESS", result=result, ttl=settings.task_result_ttl)
             logger.info(f"Task {task_id} completed successfully.")
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
-            await self.queue.fail_task(task_id, str(e), max_retries=3, base_delay=5)
+            await self.queue.fail_task(task_id, str(e), max_retries=3, base_delay=5, ttl=settings.task_result_ttl)
 
     async def _handle_task(self, task: dict):
         """

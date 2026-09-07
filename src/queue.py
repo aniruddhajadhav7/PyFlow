@@ -21,6 +21,20 @@ class RedisQueue:
         self.delayed_queue_key = f"delayed_queue:{self.queue_name}"
         self.failed_queue_key = f"failed_queue:{self.queue_name}"
 
+    def _deserialize_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        if not task_data:
+            return task_data
+
+        task_data["payload"] = json.loads(task_data.get("payload", "{}"))
+
+        if "result" in task_data:
+            try:
+                task_data["result"] = json.loads(task_data["result"])
+            except (TypeError, ValueError):
+                pass
+
+        return task_data
+
     async def enqueue(self, task_name: str, task_payload: dict = None) -> str:
         """
         Enqueues a task and returns its unique task_id.
@@ -79,9 +93,7 @@ class RedisQueue:
             await self.redis_client.hset(task_key, "status", "RUNNING")
             task_data["status"] = "RUNNING"
 
-            # Deserialize payload
-            task_data["payload"] = json.loads(task_data.get("payload", "{}"))
-            return task_data
+            return self._deserialize_task(task_data)
         except redis.RedisError as e:
             raise QueueError(f"Redis error during dequeue: {e}")
 
@@ -103,8 +115,7 @@ class RedisQueue:
                     f"Data for task {task_id} not found in storage."
                 )
 
-            task_data["payload"] = json.loads(task_data.get("payload", "{}"))
-            return task_data
+            return self._deserialize_task(task_data)
         except redis.RedisError as e:
             raise QueueError(f"Redis error during peek: {e}")
 
@@ -127,8 +138,7 @@ class RedisQueue:
             if not task_data:
                 return None
 
-            task_data["payload"] = json.loads(task_data.get("payload", "{}"))
-            return task_data
+            return self._deserialize_task(task_data)
         except redis.RedisError as e:
             raise QueueError(f"Redis error fetching task: {e}")
 
@@ -152,8 +162,7 @@ class RedisQueue:
                 
             for task_data in task_data_list:
                 if task_data:
-                    task_data["payload"] = json.loads(task_data.get("payload", "{}"))
-                    tasks.append(task_data)
+                    tasks.append(self._deserialize_task(task_data))
             return tasks
         except redis.RedisError as e:
             raise QueueError(f"Redis error listing tasks: {e}")
@@ -182,13 +191,26 @@ class RedisQueue:
         except redis.RedisError as e:
             raise QueueError(f"Redis error cancelling task: {e}")
 
-    async def update_task_status(self, task_id: str, status: str):
+    async def update_task_status(self, task_id: str, status: str, result: Any = None, ttl: int = None):
         """
-        Updates the status of a task.
+        Updates the status of a task, optionally stores a result, and sets an optional TTL.
         """
         task_key = f"task:{task_id}"
+        mapping = {"status": status}
+        if result is not None:
+            try:
+                mapping["result"] = json.dumps(result)
+            except (TypeError, ValueError):
+                mapping["result"] = str(result)
+
         try:
-            await self.redis_client.hset(task_key, "status", status)
+            if ttl is not None and ttl > 0:
+                async with self.redis_client.pipeline(transaction=True) as pipe:
+                    pipe.hset(task_key, mapping=mapping)
+                    pipe.expire(task_key, ttl)
+                    await pipe.execute()
+            else:
+                await self.redis_client.hset(task_key, mapping=mapping)
         except redis.RedisError as e:
             raise QueueError(f"Redis error updating task status: {e}")
 
@@ -198,6 +220,7 @@ class RedisQueue:
         error_message: str,
         max_retries: int = 3,
         base_delay: int = 5,
+        ttl: int = None,
     ):
         """
         Handles a task failure. If retries remain, calculates exponential backoff and puts in delayed queue.
@@ -231,10 +254,19 @@ class RedisQueue:
                 )
             else:
                 # Permanently failed
-                await self.redis_client.hset(
-                    task_key, mapping={"status": "FAILED", "error": error_message}
-                )
-                await self.redis_client.rpush(self.failed_queue_key, task_id)
+                if ttl is not None and ttl > 0:
+                    async with self.redis_client.pipeline(transaction=True) as pipe:
+                        pipe.hset(
+                            task_key, mapping={"status": "FAILED", "error": error_message}
+                        )
+                        pipe.rpush(self.failed_queue_key, task_id)
+                        pipe.expire(task_key, ttl)
+                        await pipe.execute()
+                else:
+                    await self.redis_client.hset(
+                        task_key, mapping={"status": "FAILED", "error": error_message}
+                    )
+                    await self.redis_client.rpush(self.failed_queue_key, task_id)
         except redis.RedisError as e:
             raise QueueError(f"Redis error handling task failure: {e}")
 

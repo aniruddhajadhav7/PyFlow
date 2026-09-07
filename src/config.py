@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Worker Settings
     worker_concurrency: int = 100
 
+    # Task Settings
+    task_result_ttl: int = 86400  # Default 24 hours
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
