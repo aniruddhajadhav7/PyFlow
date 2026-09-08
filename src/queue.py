@@ -13,13 +13,18 @@ class TaskNotFoundError(QueueError):
 
 
 class RedisQueue:
-    def __init__(self, redis_url: str, queue_name: str = "default_queue"):
+    def __init__(self, redis_url: str):
         self.redis_url = redis_url
-        self.queue_name = queue_name
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
-        self.queue_key = f"queue:{self.queue_name}"
-        self.delayed_queue_key = f"delayed_queue:{self.queue_name}"
-        self.failed_queue_key = f"failed_queue:{self.queue_name}"
+
+    def _get_queue_key(self, queue_name: str) -> str:
+        return f"queue:{queue_name}"
+
+    def _get_delayed_queue_key(self, queue_name: str) -> str:
+        return f"delayed_queue:{queue_name}"
+
+    def _get_failed_queue_key(self, queue_name: str) -> str:
+        return f"failed_queue:{queue_name}"
 
     def _deserialize_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         if not task_data:
@@ -35,9 +40,19 @@ class RedisQueue:
 
         return task_data
 
-    async def enqueue(self, task_name: str, task_payload: dict = None) -> str:
+    async def get_known_queues(self) -> list[str]:
         """
-        Enqueues a task and returns its unique task_id.
+        Retrieves the list of all dynamically known queues.
+        """
+        try:
+            queues = await self.redis_client.smembers("queues:known")
+            return list(queues) if queues else ["default"]
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error getting known queues: {e}")
+
+    async def enqueue(self, queue_name: str, task_name: str, task_payload: dict = None) -> str:
+        """
+        Enqueues a task to the specified queue and returns its unique task_id.
         """
         if task_payload is None:
             task_payload = {}
@@ -54,6 +69,7 @@ class RedisQueue:
         task_data = {
             "id": task_id,
             "task_name": task_name,
+            "queue_name": queue_name,
             "payload": serialized_payload,
             "status": "PENDING",
             "retry_count": 0,
@@ -64,46 +80,47 @@ class RedisQueue:
             now = time.time()
             async with self.redis_client.pipeline(transaction=True) as pipe:
                 pipe.hset(task_key, mapping=task_data)
-                pipe.rpush(self.queue_key, task_id)
-                pipe.zadd(f"tasks:created:{self.queue_name}", {task_id: now})
+                pipe.rpush(self._get_queue_key(queue_name), task_id)
+                pipe.zadd("tasks:created", {task_id: now})
+                pipe.sadd("queues:known", queue_name)
                 await pipe.execute()
             return task_id
         except redis.RedisError as e:
             raise QueueError(f"Redis error during enqueue: {e}")
 
-    async def dequeue(self) -> Optional[Dict[str, Any]]:
+    async def dequeue(self, queues: list[str]) -> Optional[Dict[str, Any]]:
         """
-        Dequeues a task from the front of the queue, updates its status, and returns its data.
-        Returns None if the queue is empty.
+        Dequeues a task from the front of the first available queue, updates its status, and returns its data.
+        Returns None if all queues are empty.
         """
         try:
-            task_id = await self.redis_client.lpop(self.queue_key)
-            if not task_id:
-                return None
+            for queue_name in queues:
+                task_id = await self.redis_client.lpop(self._get_queue_key(queue_name))
+                if task_id:
+                    task_key = f"task:{task_id}"
+                    task_data = await self.redis_client.hgetall(task_key)
 
-            task_key = f"task:{task_id}"
-            task_data = await self.redis_client.hgetall(task_key)
+                    if not task_data:
+                        raise TaskNotFoundError(
+                            f"Data for task {task_id} not found in storage."
+                        )
 
-            if not task_data:
-                raise TaskNotFoundError(
-                    f"Data for task {task_id} not found in storage."
-                )
+                    # Update status to processing
+                    await self.redis_client.hset(task_key, "status", "RUNNING")
+                    task_data["status"] = "RUNNING"
 
-            # Update status to processing
-            await self.redis_client.hset(task_key, "status", "RUNNING")
-            task_data["status"] = "RUNNING"
-
-            return self._deserialize_task(task_data)
+                    return self._deserialize_task(task_data)
+            return None
         except redis.RedisError as e:
             raise QueueError(f"Redis error during dequeue: {e}")
 
-    async def peek(self) -> Optional[Dict[str, Any]]:
+    async def peek(self, queue_name: str) -> Optional[Dict[str, Any]]:
         """
-        Returns the data of the task at the front of the queue without dequeuing it.
+        Returns the data of the task at the front of the specified queue without dequeuing it.
         Returns None if the queue is empty.
         """
         try:
-            task_id = await self.redis_client.lindex(self.queue_key, 0)
+            task_id = await self.redis_client.lindex(self._get_queue_key(queue_name), 0)
             if not task_id:
                 return None
 
@@ -119,12 +136,12 @@ class RedisQueue:
         except redis.RedisError as e:
             raise QueueError(f"Redis error during peek: {e}")
 
-    async def queue_length(self) -> int:
+    async def queue_length(self, queue_name: str) -> int:
         """
-        Returns the number of tasks currently in the queue.
+        Returns the number of tasks currently in the specified queue.
         """
         try:
-            return await self.redis_client.llen(self.queue_key)
+            return await self.redis_client.llen(self._get_queue_key(queue_name))
         except redis.RedisError as e:
             raise QueueError(f"Redis error fetching queue length: {e}")
 
@@ -144,11 +161,11 @@ class RedisQueue:
 
     async def list_tasks(self, limit: int = 50, offset: int = 0):
         """
-        Lists tasks by fetching from the creation index using ZRANGE, then pipeline HGETALL.
+        Lists all tasks globally by fetching from the creation index using ZRANGE, then pipeline HGETALL.
         """
         try:
             tasks = []
-            zset_key = f"tasks:created:{self.queue_name}"
+            zset_key = "tasks:created"
             # ZRANGE is inclusive for start and end, so we use offset and offset + limit - 1
             task_ids = await self.redis_client.zrange(zset_key, offset, offset + limit - 1)
             
@@ -172,21 +189,29 @@ class RedisQueue:
         Cancels a task if it is PENDING using an atomic Lua script.
         """
         task_key = f"task:{task_id}"
-        script = """
-        local task_key = KEYS[1]
-        local queue_key = KEYS[2]
-        local task_id = ARGV[1]
-        local status = redis.call("HGET", task_key, "status")
-        if status == "PENDING" then
-            redis.call("LREM", queue_key, 0, task_id)
-            redis.call("HSET", task_key, "status", "FAILED")
-            return 1
-        else
-            return 0
-        end
-        """
+        
         try:
-            result = await self.redis_client.eval(script, 2, task_key, self.queue_key, task_id)
+            # First fetch the queue name
+            queue_name = await self.redis_client.hget(task_key, "queue_name")
+            if not queue_name:
+                return False
+                
+            queue_key = self._get_queue_key(queue_name)
+            
+            script = """
+            local task_key = KEYS[1]
+            local queue_key = KEYS[2]
+            local task_id = ARGV[1]
+            local status = redis.call("HGET", task_key, "status")
+            if status == "PENDING" then
+                redis.call("LREM", queue_key, 0, task_id)
+                redis.call("HSET", task_key, "status", "FAILED")
+                return 1
+            else
+                return 0
+            end
+            """
+            result = await self.redis_client.eval(script, 2, task_key, queue_key, task_id)
             return bool(result)
         except redis.RedisError as e:
             raise QueueError(f"Redis error cancelling task: {e}")
@@ -232,6 +257,10 @@ class RedisQueue:
             if not task_data:
                 return
 
+            queue_name = task_data.get("queue_name", "default")
+            delayed_queue_key = self._get_delayed_queue_key(queue_name)
+            failed_queue_key = self._get_failed_queue_key(queue_name)
+
             retry_count = int(task_data.get("retry_count", 0))
             if retry_count < max_retries:
                 # Exponential backoff: base_delay * (2 ^ retry_count)
@@ -250,7 +279,7 @@ class RedisQueue:
                 )
                 # Add to delayed sorted set
                 await self.redis_client.zadd(
-                    self.delayed_queue_key, {task_id: execute_at}
+                    delayed_queue_key, {task_id: execute_at}
                 )
             else:
                 # Permanently failed
@@ -259,37 +288,41 @@ class RedisQueue:
                         pipe.hset(
                             task_key, mapping={"status": "FAILED", "error": error_message}
                         )
-                        pipe.rpush(self.failed_queue_key, task_id)
+                        pipe.rpush(failed_queue_key, task_id)
                         pipe.expire(task_key, ttl)
                         await pipe.execute()
                 else:
                     await self.redis_client.hset(
                         task_key, mapping={"status": "FAILED", "error": error_message}
                     )
-                    await self.redis_client.rpush(self.failed_queue_key, task_id)
+                    await self.redis_client.rpush(failed_queue_key, task_id)
         except redis.RedisError as e:
             raise QueueError(f"Redis error handling task failure: {e}")
 
-    async def poll_delayed_tasks(self):
+    async def poll_delayed_tasks(self, queues: list[str]):
         """
         Moves tasks from the delayed queue to the main queue if their time has come.
         """
         try:
             import time
-
             now = time.time()
-            # Fetch tasks with score <= now
-            tasks_to_enqueue = await self.redis_client.zrangebyscore(
-                self.delayed_queue_key, 0, now
-            )
+            
+            for queue_name in queues:
+                delayed_queue_key = self._get_delayed_queue_key(queue_name)
+                queue_key = self._get_queue_key(queue_name)
+                
+                # Fetch tasks with score <= now
+                tasks_to_enqueue = await self.redis_client.zrangebyscore(
+                    delayed_queue_key, 0, now
+                )
 
-            if tasks_to_enqueue:
-                # Use a pipeline to ensure atomicity for moving
-                async with self.redis_client.pipeline(transaction=True) as pipe:
-                    for task_id in tasks_to_enqueue:
-                        pipe.zrem(self.delayed_queue_key, task_id)
-                        pipe.rpush(self.queue_key, task_id)
-                    await pipe.execute()
+                if tasks_to_enqueue:
+                    # Use a pipeline to ensure atomicity for moving
+                    async with self.redis_client.pipeline(transaction=True) as pipe:
+                        for task_id in tasks_to_enqueue:
+                            pipe.zrem(delayed_queue_key, task_id)
+                            pipe.rpush(queue_key, task_id)
+                        await pipe.execute()
         except redis.RedisError as e:
             raise QueueError(f"Redis error polling delayed tasks: {e}")
 
@@ -298,23 +331,31 @@ class RedisQueue:
         Retries a FAILED task manually via API using an atomic Lua script.
         """
         task_key = f"task:{task_id}"
-        script = """
-        local task_key = KEYS[1]
-        local failed_queue_key = KEYS[2]
-        local queue_key = KEYS[3]
-        local task_id = ARGV[1]
-        local status = redis.call("HGET", task_key, "status")
-        if status == "FAILED" then
-            redis.call("LREM", failed_queue_key, 0, task_id)
-            redis.call("HSET", task_key, "status", "PENDING", "retry_count", 0, "error", "")
-            redis.call("RPUSH", queue_key, task_id)
-            return 1
-        else
-            return 0
-        end
-        """
+        
         try:
-            result = await self.redis_client.eval(script, 3, task_key, self.failed_queue_key, self.queue_key, task_id)
+            queue_name = await self.redis_client.hget(task_key, "queue_name")
+            if not queue_name:
+                return False
+                
+            failed_queue_key = self._get_failed_queue_key(queue_name)
+            queue_key = self._get_queue_key(queue_name)
+            
+            script = """
+            local task_key = KEYS[1]
+            local failed_queue_key = KEYS[2]
+            local queue_key = KEYS[3]
+            local task_id = ARGV[1]
+            local status = redis.call("HGET", task_key, "status")
+            if status == "FAILED" then
+                redis.call("LREM", failed_queue_key, 0, task_id)
+                redis.call("HSET", task_key, "status", "PENDING", "retry_count", 0, "error", "")
+                redis.call("RPUSH", queue_key, task_id)
+                return 1
+            else
+                return 0
+            end
+            """
+            result = await self.redis_client.eval(script, 3, task_key, failed_queue_key, queue_key, task_id)
             return bool(result)
         except redis.RedisError as e:
             raise QueueError(f"Redis error retrying task: {e}")

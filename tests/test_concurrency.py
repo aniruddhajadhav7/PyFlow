@@ -8,16 +8,16 @@ async def test_concurrent_enqueue(queue):
     num_tasks = 100
 
     # Enqueue tasks concurrently
-    tasks = [queue.enqueue("concurrent_test", {"id": i}) for i in range(num_tasks)]
+    tasks = [queue.enqueue("default", "concurrent_test", {"id": i}) for i in range(num_tasks)]
     await asyncio.gather(*tasks)
 
-    length = await queue.queue_length()
+    length = await queue.queue_length("default")
     assert length == num_tasks
 
     # Check that they can all be dequeued properly
     dequeued_count = 0
     while True:
-        task = await queue.dequeue()
+        task = await queue.dequeue(["default"])
         if not task:
             break
         dequeued_count += 1

@@ -14,7 +14,7 @@ async def fake_redis():
 
 @pytest_asyncio.fixture
 async def queue(fake_redis):
-    q = RedisQueue(redis_url="redis://localhost:6379/0", queue_name="test_queue")
+    q = RedisQueue(redis_url="redis://localhost:6379/0")
     q.redis_client = fake_redis
     yield q
     # We don't call q.close() because it would close the fake_redis we yielded

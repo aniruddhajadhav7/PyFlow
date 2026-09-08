@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     # Worker Settings
     worker_concurrency: int = 100
+    worker_queues: str = "default"  # Comma-separated list of queues, or "*"
 
     # Task Settings
     task_result_ttl: int = 86400  # Default 24 hours

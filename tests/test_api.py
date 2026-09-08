@@ -53,8 +53,8 @@ async def test_cancel_task(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_retry_task(client: AsyncClient, queue):
     # Enqueue a task manually and fail it so we can retry via API
-    task_id = await queue.enqueue("test_retry", {"task": "retry"})
-    await queue.dequeue()
+    task_id = await queue.enqueue("default", "test_retry", {"task": "retry"})
+    await queue.dequeue(["default"])
     await queue.fail_task(task_id, "error", max_retries=0)
 
     response = await client.post(f"/tasks/{task_id}/retry")
