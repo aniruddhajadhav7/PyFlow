@@ -8,7 +8,7 @@ from src.config import settings
 
 @pytest_asyncio.fixture
 async def worker(queue):
-    w = Worker(redis_url=settings.redis_url, queue_name=queue.queue_name)
+    w = Worker(redis_url=settings.redis_url, queues=["default"])
     w.queue = queue
     # We will override sleep to make tests fast
     yield w
@@ -21,10 +21,10 @@ async def test_worker_process_success(mock_sleep, worker, queue):
     def handle_success(payload):
         pass
 
-    task_id = await queue.enqueue("success_task", {"data": "success_task"})
+    task_id = await queue.enqueue("default", "success_task", {"data": "success_task"})
 
     # Dequeue manually and process
-    task = await queue.dequeue()
+    task = await queue.dequeue(["default"])
     await worker._process_task(task)
 
     updated_task = await queue.get_task(task_id)
@@ -38,9 +38,9 @@ async def test_worker_process_failure(mock_sleep, worker, queue):
     def handle_fail(payload):
         raise ValueError("Simulated task failure.")
 
-    task_id = await queue.enqueue("failing_task", {"fail": True})
+    task_id = await queue.enqueue("default", "failing_task", {"fail": True})
 
-    task = await queue.dequeue()
+    task = await queue.dequeue(["default"])
     await worker._process_task(task)
 
     updated_task = await queue.get_task(task_id)

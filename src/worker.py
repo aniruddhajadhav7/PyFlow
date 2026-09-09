@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self, redis_url: str, queue_name: str = "default_queue", max_concurrent_tasks: int = 100):
-        self.queue = RedisQueue(redis_url=redis_url, queue_name=queue_name)
+    def __init__(self, redis_url: str, queues: list[str] = None, max_concurrent_tasks: int = 100):
+        self.queues = queues or ["default"]
+        self.queue = RedisQueue(redis_url=redis_url)
         self.shutdown_event = asyncio.Event()
         self.active_tasks = set()
         self.task_registry: Dict[str, Callable] = {}
@@ -63,6 +64,13 @@ class Worker:
             self.active_tasks.discard(task_obj)
             self.semaphore.release()
 
+    async def _get_queues_to_poll(self) -> list[str]:
+        """Resolve which queues to poll. If '*' is specified, fetch known queues."""
+        if "*" in self.queues:
+            known = await self.queue.get_known_queues()
+            return known if known else ["default"]
+        return self.queues
+
     async def run(self):
         """
         Main worker loop.
@@ -78,8 +86,9 @@ class Worker:
 
         try:
             while not self.shutdown_event.is_set():
+                queues_to_poll = await self._get_queues_to_poll()
                 # Poll for delayed tasks before dequeuing
-                await self.queue.poll_delayed_tasks()
+                await self.queue.poll_delayed_tasks(queues_to_poll)
 
                 # Wait for capacity, allowing shutdown check every second
                 try:
@@ -87,7 +96,7 @@ class Worker:
                 except asyncio.TimeoutError:
                     continue
 
-                task = await self.queue.dequeue()
+                task = await self.queue.dequeue(queues_to_poll)
                 if task:
                     logger.info(f"Dequeued task {task['id']}")
                     # Run task asynchronously without blocking the consumer loop
@@ -114,8 +123,11 @@ class Worker:
 if __name__ == "__main__":
     from src.logger import setup_logging
     setup_logging()
+    
+    queues = [q.strip() for q in settings.worker_queues.split(",")]
     worker = Worker(
         redis_url=settings.redis_url,
+        queues=queues,
         max_concurrent_tasks=settings.worker_concurrency
     )
 
