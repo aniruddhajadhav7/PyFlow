@@ -16,8 +16,9 @@ While building scalable Python web applications, integrating background task pro
 
 - **FastAPI Core:** High-performance, asynchronous web API.
 - **Custom Redis Queue:** Fully async, lightweight task queue supporting enqueue, dequeue, peek, and delayed execution.
+- **Multi-Queue Task Routing:** Dynamic task routing to isolated queues (e.g. `default`, `high_priority`) preventing noisy-neighbor issues.
 - **Dynamic Task Registry:** Decorator-based handler registration (`@worker.task("name")`) for scalable task routing.
-- **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns.
+- **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns. Worker instances can dynamically poll all queues or specific named queues.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
 - **Resilient Retry Mechanism:** Exponential backoff for failed tasks with automated delayed requeuing and permanent failure states.
 - **Task Result Storage & TTL Expiration:** Tasks can return results, which are stored in Redis with an automated Time-to-Live (TTL) configuration to prevent indefinite memory consumption.
@@ -108,7 +109,7 @@ Once the application is running, an interactive Swagger UI is available at `/doc
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Check API health and configuration. |
-| `POST` | `/tasks/` | Submit a new task (requires `task_name` and `payload`) to the queue. |
+| `POST` | `/tasks/` | Submit a new task (requires `task_name` and `payload`, optional `queue_name`) to the queue. |
 | `GET` | `/tasks/` | List existing tasks in the queue with pagination. |
 | `GET` | `/tasks/{task_id}` | Retrieve the current status and payload of a specific task. |
 | `POST` | `/tasks/{task_id}/cancel`| Cancel a pending task before execution. |
@@ -125,6 +126,7 @@ The application is configured using standard environment variables:
 - `LOG_LEVEL`: Logging verbosity (e.g., `INFO`, `DEBUG`).
 - `REDIS_URL`: Full connection string for the Redis broker (e.g., `redis://redis:6379/0`).
 - `WORKER_CONCURRENCY`: Maximum number of concurrent tasks a worker will process (Default: `100`).
+- `WORKER_QUEUES`: Comma-separated list of queues to poll, or `*` to dynamically poll all known queues (Default: `default`).
 - `TASK_RESULT_TTL`: Time-To-Live in seconds for completed or failed task records in Redis (Default: `86400`).
 
 ---
@@ -212,7 +214,6 @@ k6 run benchmarks/benchmark.js
 ## 🚧 Limitations
 
 - **In-Memory State Limits:** Because all task data and states are stored in Redis, total queue capacity is limited by available memory. It is not designed for long-term historical audit logging.
-- **Single Worker Pool:** Currently, all tasks are routed to a single `default_queue` and processed by a unified worker pool. Granular task routing is not yet supported.
 - **No Built-in Dashboard:** There is currently no web UI to visualize queue depth, worker health, or task histories.
 - **No Scheduled Tasks:** Support for CRON-like recurring tasks is missing.
 
@@ -221,7 +222,6 @@ k6 run benchmarks/benchmark.js
 ## 🔮 Future Improvements
 
 - **PostgreSQL / Relational DB Integration**: Implement persistent storage for completed or failed tasks to enable long-term audit logging and free up Redis memory.
-- **Advanced Task Routing**: Introduce multiple named queue channels (e.g., `high-priority`, `emails`, `background-jobs`) mapped to dedicated worker pools.
 - **Monitoring Dashboard**: Develop a React or Vue.js frontend for real-time visualization of queue metrics and worker metrics.
 - **Cron / Scheduled Tasks**: Build native support for enqueuing tasks on recurring, cron-based schedules.
 
