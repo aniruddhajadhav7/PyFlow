@@ -3,7 +3,7 @@ import structlog
 from src.config import settings
 from src.logger import setup_logging
 from src.queue import RedisQueue
-from src.routers import tasks
+from src.routers import tasks, schedules
 from src.middleware import RateLimitMiddleware
 from contextlib import asynccontextmanager
 
@@ -27,6 +27,7 @@ app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.add_middleware(RateLimitMiddleware)
 
 app.include_router(tasks.router)
+app.include_router(schedules.router)
 
 
 @app.get("/health")

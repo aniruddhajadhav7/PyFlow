@@ -365,3 +365,163 @@ class RedisQueue:
         Closes the Redis connection.
         """
         await self.redis_client.aclose()
+
+    def _deserialize_schedule(self, schedule_data: Dict[str, Any]) -> Dict[str, Any]:
+        if not schedule_data:
+            return schedule_data
+
+        schedule_data["payload"] = json.loads(schedule_data.get("payload", "{}"))
+        schedule_data["next_execution"] = float(schedule_data.get("next_execution", 0))
+        schedule_data["created_at"] = float(schedule_data.get("created_at", 0))
+
+        return schedule_data
+
+    async def schedule_task(self, cron_expression: str, queue_name: str, task_name: str, task_payload: dict = None) -> str:
+        """
+        Creates a new recurring schedule and returns its unique schedule_id.
+        """
+        from croniter import croniter
+        import time
+        if task_payload is None:
+            task_payload = {}
+
+        if not croniter.is_valid(cron_expression):
+            raise QueueError("Invalid cron expression")
+
+        schedule_id = str(uuid.uuid4())
+        schedule_key = f"schedule:{schedule_id}"
+        
+        try:
+            serialized_payload = json.dumps(task_payload)
+        except (TypeError, ValueError) as e:
+            raise QueueError(f"Failed to serialize task payload: {e}")
+
+        now = time.time()
+        cron = croniter(cron_expression, now)
+        next_execution = cron.get_next(float)
+
+        schedule_data = {
+            "id": schedule_id,
+            "cron_expression": cron_expression,
+            "queue_name": queue_name,
+            "task_name": task_name,
+            "payload": serialized_payload,
+            "next_execution": next_execution,
+            "created_at": now,
+        }
+
+        try:
+            async with self.redis_client.pipeline(transaction=True) as pipe:
+                pipe.hset(schedule_key, mapping=schedule_data)
+                pipe.zadd("schedules:execution", {schedule_id: next_execution})
+                await pipe.execute()
+            return schedule_id
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error during schedule_task: {e}")
+
+    async def poll_scheduled_tasks(self):
+        """
+        Finds schedules that are due, enqueues their tasks, and recalculates their next execution time.
+        Uses ZPOPMIN to ensure only one worker processes a given schedule trigger.
+        """
+        from croniter import croniter
+        import time
+        try:
+            now = time.time()
+            # We want to process all due schedules, but ZPOPMIN gives us one at a time.
+            # We pop 1 schedule. If its score is <= now, we process it. Otherwise, we put it back and stop.
+            while True:
+                # Atomically pop the schedule with the lowest score
+                popped = await self.redis_client.zpopmin("schedules:execution")
+                if not popped:
+                    break
+                    
+                schedule_id, score = popped[0]
+                if score > now:
+                    # It's not due yet. Put it back and stop.
+                    await self.redis_client.zadd("schedules:execution", {schedule_id: score})
+                    break
+                
+                # It's due! Let's get the schedule data
+                schedule_key = f"schedule:{schedule_id}"
+                schedule_data = await self.redis_client.hgetall(schedule_key)
+                
+                if not schedule_data:
+                    # Schedule was somehow deleted after pop. Ignore.
+                    continue
+                
+                deserialized = self._deserialize_schedule(schedule_data)
+                
+                # Enqueue the task
+                await self.enqueue(
+                    queue_name=deserialized["queue_name"],
+                    task_name=deserialized["task_name"],
+                    task_payload=deserialized["payload"]
+                )
+                
+                # Calculate next execution
+                cron = croniter(deserialized["cron_expression"], now)
+                next_execution = cron.get_next(float)
+                
+                # Update the schedule's next_execution and add it back to the ZSET
+                async with self.redis_client.pipeline(transaction=True) as pipe:
+                    pipe.hset(schedule_key, "next_execution", next_execution)
+                    pipe.zadd("schedules:execution", {schedule_id: next_execution})
+                    await pipe.execute()
+                    
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error polling scheduled tasks: {e}")
+
+    async def get_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves a schedule's data by its ID.
+        """
+        schedule_key = f"schedule:{schedule_id}"
+        try:
+            schedule_data = await self.redis_client.hgetall(schedule_key)
+            if not schedule_data:
+                return None
+            return self._deserialize_schedule(schedule_data)
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error fetching schedule: {e}")
+
+    async def list_schedules(self, limit: int = 50, offset: int = 0):
+        """
+        Lists all schedules by fetching from the sorted set.
+        """
+        try:
+            schedules = []
+            zset_key = "schedules:execution"
+            schedule_ids = await self.redis_client.zrange(zset_key, offset, offset + limit - 1)
+            
+            if not schedule_ids:
+                return []
+                
+            async with self.redis_client.pipeline(transaction=False) as pipe:
+                for schedule_id in schedule_ids:
+                    pipe.hgetall(f"schedule:{schedule_id}")
+                schedule_data_list = await pipe.execute()
+                
+            for schedule_data in schedule_data_list:
+                if schedule_data:
+                    schedules.append(self._deserialize_schedule(schedule_data))
+            return schedules
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error listing schedules: {e}")
+
+    async def cancel_schedule(self, schedule_id: str) -> bool:
+        """
+        Deletes a schedule.
+        """
+        schedule_key = f"schedule:{schedule_id}"
+        try:
+            async with self.redis_client.pipeline(transaction=True) as pipe:
+                pipe.exists(schedule_key)
+                pipe.delete(schedule_key)
+                pipe.zrem("schedules:execution", schedule_id)
+                results = await pipe.execute()
+            
+            # The first result of pipeline is the output of `exists`
+            return bool(results[0])
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error cancelling schedule: {e}")

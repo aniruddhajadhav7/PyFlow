@@ -87,6 +87,10 @@ class Worker:
         try:
             while not self.shutdown_event.is_set():
                 queues_to_poll = await self._get_queues_to_poll()
+                
+                # Poll for scheduled/cron tasks
+                await self.queue.poll_scheduled_tasks()
+
                 # Poll for delayed tasks before dequeuing
                 await self.queue.poll_delayed_tasks(queues_to_poll)
 
