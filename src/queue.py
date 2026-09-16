@@ -525,3 +525,54 @@ class RedisQueue:
             return bool(results[0])
         except redis.RedisError as e:
             raise QueueError(f"Redis error cancelling schedule: {e}")
+
+    async def list_failed_tasks(self, queue_name: str, limit: int = 50, offset: int = 0) -> list[Dict[str, Any]]:
+        """
+        Lists permanently failed tasks in a specific queue with pagination.
+        """
+        try:
+            failed_queue_key = self._get_failed_queue_key(queue_name)
+            # LRANGE is inclusive for start and end, so we use offset and offset + limit - 1
+            task_ids = await self.redis_client.lrange(failed_queue_key, offset, offset + limit - 1)
+            
+            if not task_ids:
+                return []
+                
+            async with self.redis_client.pipeline(transaction=False) as pipe:
+                for task_id in task_ids:
+                    pipe.hgetall(f"task:{task_id}")
+                task_data_list = await pipe.execute()
+                
+            tasks = []
+            for task_data in task_data_list:
+                if task_data:
+                    tasks.append(self._deserialize_task(task_data))
+            return tasks
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error listing failed tasks: {e}")
+
+    async def clear_failed_tasks(self, queue_name: str) -> int:
+        """
+        Clears all tasks from the failed queue and permanently deletes their data from Redis.
+        Returns the number of tasks cleared.
+        """
+        try:
+            failed_queue_key = self._get_failed_queue_key(queue_name)
+            
+            # Lua script to get all task IDs, delete their hashes, and delete the queue list itself
+            script = """
+            local queue_key = KEYS[1]
+            local task_ids = redis.call("LRANGE", queue_key, 0, -1)
+            for _, task_id in ipairs(task_ids) do
+                redis.call("DEL", "task:" .. task_id)
+            end
+            if #task_ids > 0 then
+                redis.call("DEL", queue_key)
+            end
+            return #task_ids
+            """
+            result = await self.redis_client.eval(script, 1, failed_queue_key)
+            return int(result) if result else 0
+                
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error clearing failed tasks: {e}")

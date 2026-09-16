@@ -68,6 +68,40 @@ async def test_retry_task(client: AsyncClient, queue):
 
 
 @pytest.mark.asyncio
+async def test_list_failed_tasks(client: AsyncClient, queue):
+    # Enqueue and fail multiple tasks manually
+    for i in range(3):
+        task_id = await queue.enqueue("default", f"fail_task_{i}", {"task": i})
+        await queue.dequeue(["default"])
+        await queue.fail_task(task_id, "error", max_retries=0)
+
+    response = await client.get("/tasks/failed?queue_name=default")
+    assert response.status_code == 200
+    data = response.json()
+    assert "tasks" in data
+    assert len(data["tasks"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_clear_failed_tasks(client: AsyncClient, queue):
+    # Enqueue and fail multiple tasks manually
+    for i in range(2):
+        task_id = await queue.enqueue("default", f"fail_task_{i}", {"task": i})
+        await queue.dequeue(["default"])
+        await queue.fail_task(task_id, "error", max_retries=0)
+
+    response = await client.delete("/tasks/failed?queue_name=default")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "Successfully cleared 2 tasks" in data["message"]
+
+    # verify it's cleared
+    tasks = await queue.list_failed_tasks("default")
+    assert len(tasks) == 0
+
+
+@pytest.mark.asyncio
 async def test_health_check(client: AsyncClient, queue):
     response = await client.get("/health")
     assert response.status_code == 200
