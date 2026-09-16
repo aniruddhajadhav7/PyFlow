@@ -17,6 +17,7 @@ While building scalable Python web applications, integrating background task pro
 - **FastAPI Core:** High-performance, asynchronous web API.
 - **Custom Redis Queue:** Fully async, lightweight task queue supporting enqueue, dequeue, peek, and delayed execution.
 - **Multi-Queue Task Routing:** Dynamic task routing to isolated queues (e.g. `default`, `high_priority`) preventing noisy-neighbor issues.
+- **Periodic / Cron Tasks:** Native support for defining recurring scheduled tasks using standard cron expressions (e.g. `*/5 * * * *`) powered by atomic Redis polling.
 - **Dynamic Task Registry:** Decorator-based handler registration (`@worker.task("name")`) for scalable task routing.
 - **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns. Worker instances can dynamically poll all queues or specific named queues.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
@@ -114,6 +115,10 @@ Once the application is running, an interactive Swagger UI is available at `/doc
 | `GET` | `/tasks/{task_id}` | Retrieve the current status and payload of a specific task. |
 | `POST` | `/tasks/{task_id}/cancel`| Cancel a pending task before execution. |
 | `POST` | `/tasks/{task_id}/retry` | Manually trigger a retry for a permanently failed task. |
+| `POST` | `/schedules/` | Create a new recurring scheduled task (requires `cron_expression`, `task_name`). |
+| `GET` | `/schedules/` | List all active scheduled tasks. |
+| `GET` | `/schedules/{schedule_id}` | Retrieve details of a specific schedule. |
+| `DELETE` | `/schedules/{schedule_id}` | Cancel and delete a schedule. |
 
 ---
 
@@ -215,7 +220,6 @@ k6 run benchmarks/benchmark.js
 
 - **In-Memory State Limits:** Because all task data and states are stored in Redis, total queue capacity is limited by available memory. It is not designed for long-term historical audit logging.
 - **No Built-in Dashboard:** There is currently no web UI to visualize queue depth, worker health, or task histories.
-- **No Scheduled Tasks:** Support for CRON-like recurring tasks is missing.
 
 ---
 
@@ -223,7 +227,6 @@ k6 run benchmarks/benchmark.js
 
 - **PostgreSQL / Relational DB Integration**: Implement persistent storage for completed or failed tasks to enable long-term audit logging and free up Redis memory.
 - **Monitoring Dashboard**: Develop a React or Vue.js frontend for real-time visualization of queue metrics and worker metrics.
-- **Cron / Scheduled Tasks**: Build native support for enqueuing tasks on recurring, cron-based schedules.
 
 ---
 

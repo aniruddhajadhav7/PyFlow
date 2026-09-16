@@ -118,3 +118,48 @@ async def test_list_tasks_pagination(queue):
     
     tasks_page_3 = await queue.list_tasks(limit=2, offset=4)
     assert len(tasks_page_3) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_failed_tasks_pagination(queue):
+    import asyncio
+    # Enqueue and fail multiple tasks
+    for i in range(5):
+        task_id = await queue.enqueue("default", f"fail_task_{i}", {"task": i})
+        await queue.dequeue(["default"])
+        await queue.fail_task(task_id, "error", max_retries=0)
+        await asyncio.sleep(0.01)
+
+    tasks_page_1 = await queue.list_failed_tasks("default", limit=2, offset=0)
+    assert len(tasks_page_1) == 2
+    
+    tasks_page_2 = await queue.list_failed_tasks("default", limit=2, offset=2)
+    assert len(tasks_page_2) == 2
+    assert tasks_page_1[0]["id"] != tasks_page_2[0]["id"]
+    
+    tasks_page_3 = await queue.list_failed_tasks("default", limit=2, offset=4)
+    assert len(tasks_page_3) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_failed_tasks(queue):
+    # Enqueue and fail multiple tasks
+    for i in range(3):
+        task_id = await queue.enqueue("default", f"fail_task_{i}", {"task": i})
+        await queue.dequeue(["default"])
+        await queue.fail_task(task_id, "error", max_retries=0)
+
+    failed_tasks = await queue.list_failed_tasks("default", limit=10)
+    assert len(failed_tasks) == 3
+
+    # Clear failed queue
+    cleared_count = await queue.clear_failed_tasks("default")
+    assert cleared_count == 3
+
+    failed_tasks_after = await queue.list_failed_tasks("default", limit=10)
+    assert len(failed_tasks_after) == 0
+
+    # Ensure task data is also deleted
+    for task in failed_tasks:
+        task_data = await queue.get_task(task["id"])
+        assert task_data is None

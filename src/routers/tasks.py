@@ -29,6 +29,24 @@ async def submit_task(
     return task_data
 
 
+@router.get("/failed", response_model=TaskListResponse)
+async def list_failed_tasks(
+    queue_name: str = "default", limit: int = 50, offset: int = 0, queue: RedisQueue = Depends(get_queue)
+):
+    """List permanently failed tasks for a specific queue."""
+    tasks = await queue.list_failed_tasks(queue_name, limit=limit, offset=offset)
+    return {"tasks": tasks}
+
+
+@router.delete("/failed", response_model=TaskMessageResponse)
+async def clear_failed_tasks(
+    queue_name: str = "default", queue: RedisQueue = Depends(get_queue)
+):
+    """Bulk clear all permanently failed tasks from a specific queue."""
+    cleared_count = await queue.clear_failed_tasks(queue_name)
+    return {"message": f"Successfully cleared {cleared_count} tasks from the failed queue '{queue_name}'.", "success": True}
+
+
 @router.get("/", response_model=TaskListResponse)
 async def list_tasks(
     limit: int = 50, offset: int = 0, queue: RedisQueue = Depends(get_queue)
