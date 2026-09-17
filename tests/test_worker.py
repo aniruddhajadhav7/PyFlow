@@ -28,7 +28,18 @@ async def test_worker_process_success(mock_sleep, worker, queue):
     await worker._process_task(task)
 
     updated_task = await queue.get_task(task_id)
-    assert updated_task["status"] == "SUCCESS"
+    assert updated_task is None  # Task is deleted from Redis on success
+
+    import uuid
+    from src.db import AsyncSessionLocal
+    from sqlalchemy.future import select
+    from src.models import TaskLog
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(TaskLog).where(TaskLog.id == uuid.UUID(task_id)))
+        log = result.scalars().first()
+        assert log is not None
+        assert log.status == "SUCCESS"
 
 
 @pytest.mark.asyncio

@@ -246,7 +246,7 @@ class RedisQueue:
         max_retries: int = 3,
         base_delay: int = 5,
         ttl: int = None,
-    ):
+    ) -> bool:
         """
         Handles a task failure. If retries remain, calculates exponential backoff and puts in delayed queue.
         Otherwise, moves it to the permanently failed queue.
@@ -255,7 +255,7 @@ class RedisQueue:
         try:
             task_data = await self.redis_client.hgetall(task_key)
             if not task_data:
-                return
+                return False
 
             queue_name = task_data.get("queue_name", "default")
             delayed_queue_key = self._get_delayed_queue_key(queue_name)
@@ -281,6 +281,7 @@ class RedisQueue:
                 await self.redis_client.zadd(
                     delayed_queue_key, {task_id: execute_at}
                 )
+                return False
             else:
                 # Permanently failed
                 if ttl is not None and ttl > 0:
@@ -296,8 +297,21 @@ class RedisQueue:
                         task_key, mapping={"status": "FAILED", "error": error_message}
                     )
                     await self.redis_client.rpush(failed_queue_key, task_id)
+                return True
         except redis.RedisError as e:
             raise QueueError(f"Redis error handling task failure: {e}")
+
+    async def delete_task(self, task_id: str, queue_name: str = None):
+        """Deletes a task completely from Redis and removes it from list references if queue_name is provided."""
+        task_key = f"task:{task_id}"
+        try:
+            if queue_name:
+                await self.redis_client.lrem(self._get_queue_key(queue_name), 0, task_id)
+                await self.redis_client.lrem(self._get_failed_queue_key(queue_name), 0, task_id)
+            await self.redis_client.delete(task_key)
+            await self.redis_client.zrem("tasks:created", task_id)
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error deleting task: {e}")
 
     async def poll_delayed_tasks(self, queues: list[str]):
         """

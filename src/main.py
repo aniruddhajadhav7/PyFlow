@@ -11,11 +11,14 @@ setup_logging()
 logger = structlog.get_logger(__name__)
 
 
+from src.db import init_db
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
         "Application starting up", app_name=settings.app_name, debug=settings.debug
     )
+    await init_db()
     app.state.queue = RedisQueue(redis_url=settings.redis_url)
     yield
     logger.info("Application shutting down")

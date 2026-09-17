@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/pyflow"
 
     # Rate Limiting Settings
     rate_limit_algorithm: str = "token_bucket"  # or "sliding_window"

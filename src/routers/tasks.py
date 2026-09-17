@@ -6,6 +6,10 @@ from src.schemas.tasks import (
     TaskMessageResponse,
 )
 from src.queue import RedisQueue
+from src.db import get_db, AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import desc
+from src.models import TaskLog
 from uuid import UUID
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -28,6 +32,37 @@ async def submit_task(
         )
     return task_data
 
+@router.get("/history")
+async def list_task_history(
+    queue_name: str = "default", limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)
+):
+    """Retrieve historical tasks (completed or permanently failed) from the database."""
+    stmt = (
+        select(TaskLog)
+        .where(TaskLog.queue_name == queue_name)
+        .order_by(desc(TaskLog.created_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    task_logs = result.scalars().all()
+    
+    return {
+        "tasks": [
+            {
+                "id": str(log.id),
+                "task_name": log.task_name,
+                "queue_name": log.queue_name,
+                "status": log.status,
+                "payload": log.payload,
+                "result": log.result,
+                "error": log.error,
+                "created_at": log.created_at.isoformat(),
+                "completed_at": log.completed_at.isoformat(),
+            }
+            for log in task_logs
+        ]
+    }
 
 @router.get("/failed", response_model=TaskListResponse)
 async def list_failed_tasks(
