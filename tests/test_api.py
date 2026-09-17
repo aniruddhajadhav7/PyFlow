@@ -102,6 +102,26 @@ async def test_clear_failed_tasks(client: AsyncClient, queue):
 
 
 @pytest.mark.asyncio
+async def test_list_task_history(client: AsyncClient, db_session):
+    from src.models import TaskLog
+    import uuid
+    # Create some dummy logs
+    log1 = TaskLog(id=uuid.uuid4(), task_name="history1", queue_name="default", status="SUCCESS", payload={})
+    log2 = TaskLog(id=uuid.uuid4(), task_name="history2", queue_name="default", status="FAILED", payload={})
+    db_session.add_all([log1, log2])
+    await db_session.commit()
+
+    response = await client.get("/tasks/history?queue_name=default")
+    assert response.status_code == 200
+    data = response.json()
+    assert "tasks" in data
+    assert len(data["tasks"]) >= 2
+    task_names = [t["task_name"] for t in data["tasks"]]
+    assert "history1" in task_names
+    assert "history2" in task_names
+
+
+@pytest.mark.asyncio
 async def test_health_check(client: AsyncClient, queue):
     response = await client.get("/health")
     assert response.status_code == 200
