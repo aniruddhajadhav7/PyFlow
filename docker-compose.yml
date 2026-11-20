@@ -8,8 +8,11 @@ services:
       - DEBUG=True
       - LOG_LEVEL=INFO
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/pyflow
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -17,6 +20,23 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  worker:
+    build: .
+    command: ["python", "-m", "src.worker"]
+    environment:
+      - APP_NAME=PyFlow
+      - DEBUG=True
+      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/pyflow
+      - WORKER_QUEUES=*
+      - WORKER_CONCURRENCY=100
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -28,3 +48,23 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=pyflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  pgdata:

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, Any, List
 from uuid import UUID
 from croniter import croniter
@@ -9,8 +9,9 @@ class ScheduleCreateRequest(BaseModel):
     task_name: str = Field(..., description="The name or type of the task")
     payload: Dict[str, Any] = Field(default_factory=dict, description="The task data payload")
 
-    @validator('cron_expression')
-    def validate_cron(cls, v):
+    @field_validator('cron_expression')
+    @classmethod
+    def validate_cron(cls, v: str) -> str:
         if not croniter.is_valid(v):
             raise ValueError('Invalid cron expression')
         return v

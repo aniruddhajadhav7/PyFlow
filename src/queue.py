@@ -91,11 +91,27 @@ class RedisQueue:
     async def dequeue(self, queues: list[str]) -> Optional[Dict[str, Any]]:
         """
         Dequeues a task from the front of the first available queue, updates its status, and returns its data.
+        Uses an atomic Lua script to prevent race conditions.
         Returns None if all queues are empty.
+        """
+        dequeue_script = """
+        local queue_key = KEYS[1]
+        local task_id = redis.call("LPOP", queue_key)
+        if not task_id then
+            return nil
+        end
+        local task_key = "task:" .. task_id
+        local exists = redis.call("EXISTS", task_key)
+        if exists == 0 then
+            return nil
+        end
+        redis.call("HSET", task_key, "status", "RUNNING")
+        return task_id
         """
         try:
             for queue_name in queues:
-                task_id = await self.redis_client.lpop(self._get_queue_key(queue_name))
+                queue_key = self._get_queue_key(queue_name)
+                task_id = await self.redis_client.eval(dequeue_script, 1, queue_key)
                 if task_id:
                     task_key = f"task:{task_id}"
                     task_data = await self.redis_client.hgetall(task_key)
@@ -104,10 +120,6 @@ class RedisQueue:
                         raise TaskNotFoundError(
                             f"Data for task {task_id} not found in storage."
                         )
-
-                    # Update status to processing
-                    await self.redis_client.hset(task_key, "status", "RUNNING")
-                    task_data["status"] = "RUNNING"
 
                     return self._deserialize_task(task_data)
             return None
@@ -205,7 +217,7 @@ class RedisQueue:
             local status = redis.call("HGET", task_key, "status")
             if status == "PENDING" then
                 redis.call("LREM", queue_key, 0, task_id)
-                redis.call("HSET", task_key, "status", "FAILED")
+                redis.call("HSET", task_key, "status", "CANCELLED")
                 return 1
             else
                 return 0
@@ -573,12 +585,13 @@ class RedisQueue:
         try:
             failed_queue_key = self._get_failed_queue_key(queue_name)
             
-            # Lua script to get all task IDs, delete their hashes, and delete the queue list itself
+            # Lua script to get all task IDs, delete their hashes, clean up sorted set, and delete the queue list itself
             script = """
             local queue_key = KEYS[1]
             local task_ids = redis.call("LRANGE", queue_key, 0, -1)
             for _, task_id in ipairs(task_ids) do
                 redis.call("DEL", "task:" .. task_id)
+                redis.call("ZREM", "tasks:created", task_id)
             end
             if #task_ids > 0 then
                 redis.call("DEL", queue_key)
@@ -590,3 +603,63 @@ class RedisQueue:
                 
         except redis.RedisError as e:
             raise QueueError(f"Redis error clearing failed tasks: {e}")
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """
+        Gathers comprehensive statistics for queues, schedules, and Redis status.
+        """
+        try:
+            known_queues = await self.get_known_queues()
+            queues_stats = {}
+            total_pending = 0
+            total_delayed = 0
+            total_failed = 0
+
+            for q in known_queues:
+                pending = await self.redis_client.llen(self._get_queue_key(q))
+                delayed = await self.redis_client.zcard(self._get_delayed_queue_key(q))
+                failed = await self.redis_client.llen(self._get_failed_queue_key(q))
+                queues_stats[q] = {
+                    "pending": pending,
+                    "delayed": delayed,
+                    "failed": failed,
+                    "total": pending + delayed + failed,
+                }
+                total_pending += pending
+                total_delayed += delayed
+                total_failed += failed
+
+            total_schedules = await self.redis_client.zcard("schedules:execution")
+            total_created_tasks = await self.redis_client.zcard("tasks:created")
+
+            redis_info = {
+                "version": "connected",
+                "used_memory_human": "N/A",
+                "connected_clients": 1,
+                "uptime_days": 0,
+            }
+            try:
+                info = await self.redis_client.info()
+                if isinstance(info, dict):
+                    redis_info = {
+                        "version": info.get("redis_version", "unknown"),
+                        "used_memory_human": info.get("used_memory_human", "N/A"),
+                        "connected_clients": info.get("connected_clients", 1),
+                        "uptime_days": round(info.get("uptime_in_seconds", 0) / 86400, 1),
+                    }
+            except Exception:
+                pass
+
+            return {
+                "queues": queues_stats,
+                "totals": {
+                    "pending": total_pending,
+                    "delayed": total_delayed,
+                    "failed": total_failed,
+                    "schedules": total_schedules,
+                    "registered_tasks": total_created_tasks,
+                },
+                "redis": redis_info,
+            }
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error fetching stats: {e}")

@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import signal
+from datetime import datetime, timezone
+import inspect
 from typing import Callable, Dict, Any
 from src.queue import RedisQueue
 from src.config import settings
@@ -41,7 +43,7 @@ class Worker:
             if not handler:
                 raise ValueError(f"No handler registered for task type: '{task_name}'")
 
-            if asyncio.iscoroutinefunction(handler):
+            if inspect.iscoroutinefunction(handler):
                 result = await handler(payload)
             else:
                 result = handler(payload)
@@ -49,7 +51,7 @@ class Worker:
             # On success
             await self.queue.update_task_status(task_id, "SUCCESS", result=result, ttl=settings.task_result_ttl)
             logger.info(f"Task {task_id} completed successfully.")
-            
+
             # Persist to DB and remove from Redis
             from src.db import AsyncSessionLocal
             from src.models import TaskLog
@@ -62,7 +64,8 @@ class Worker:
                     status="SUCCESS",
                     payload=payload,
                     result=result,
-                    error=None
+                    error=None,
+                    completed_at=datetime.now(timezone.utc),
                 )
                 session.add(log)
                 await session.commit()
@@ -70,8 +73,15 @@ class Worker:
 
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
-            permanently_failed = await self.queue.fail_task(task_id, str(e), max_retries=3, base_delay=5, ttl=settings.task_result_ttl)
+            permanently_failed = await self.queue.fail_task(
+                task_id,
+                str(e),
+                max_retries=settings.task_max_retries,
+                base_delay=settings.task_retry_base_delay,
+                ttl=settings.task_result_ttl,
+            )
             if permanently_failed:
+                # Persist to DB but keep in Redis DLQ so the /tasks/failed API works
                 from src.db import AsyncSessionLocal
                 from src.models import TaskLog
                 import uuid
@@ -83,20 +93,11 @@ class Worker:
                         status="FAILED",
                         payload=payload,
                         result=None,
-                        error=str(e)
+                        error=str(e),
+                        completed_at=datetime.now(timezone.utc),
                     )
                     session.add(log)
                     await session.commit()
-                # Also delete it from Redis so we don't duplicate DLQ in Redis
-                # Wait, if we delete it, `queue.clear_failed_tasks` might not work.
-                # Actually, if we delete from Redis, we shouldn't have added it to failed_queue in fail_task, 
-                # but fail_task already adds to failed_queue. We should remove it from failed_queue.
-                # Let's just delete the hash, which breaks DLQ clear if we don't remove from the list.
-                # Let's use delete_task but we need to also LREM from failed_queue.
-                # Actually, the user asked to free up Redis. We should remove from failed_queue.
-                # We can do this safely by just calling `clear_failed_tasks` but that clears all.
-                # Let's leave the Redis DLQ intact but with no data, or just not worry since DLQ might be deprecated.
-                await self.queue.delete_task(task_id, queue_name=queue_name)
 
     async def _handle_task(self, task: dict):
         """

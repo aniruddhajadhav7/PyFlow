@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     # Task Settings
     task_result_ttl: int = 86400  # Default 24 hours
+    task_max_retries: int = 3
+    task_retry_base_delay: int = 5  # seconds
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

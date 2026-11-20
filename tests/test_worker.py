@@ -40,6 +40,7 @@ async def test_worker_process_success(mock_sleep, worker, queue):
         log = result.scalars().first()
         assert log is not None
         assert log.status == "SUCCESS"
+        assert log.completed_at is not None
 
 
 @pytest.mark.asyncio

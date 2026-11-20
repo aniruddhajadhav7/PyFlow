@@ -57,8 +57,8 @@ async def list_task_history(
                 "payload": log.payload,
                 "result": log.result,
                 "error": log.error,
-                "created_at": log.created_at.isoformat(),
-                "completed_at": log.completed_at.isoformat(),
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "completed_at": log.completed_at.isoformat() if log.completed_at else None,
             }
             for log in task_logs
         ]
@@ -100,7 +100,7 @@ async def retrieve_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
     return task_data
 
 
-@router.delete("/{task_id}", response_model=TaskMessageResponse)
+@router.post("/{task_id}/cancel", response_model=TaskMessageResponse)
 async def cancel_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
     """Cancel a pending task."""
     success = await queue.cancel_task(str(task_id))
@@ -110,6 +110,17 @@ async def cancel_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
             detail="Task could not be cancelled. It may not exist or is no longer PENDING.",
         )
     return {"message": "Task cancelled successfully.", "success": True}
+
+
+@router.delete("/{task_id}", response_model=TaskMessageResponse)
+async def delete_task(task_id: UUID, queue: RedisQueue = Depends(get_queue)):
+    """Delete a task entirely from the queue."""
+    task_data = await queue.get_task(str(task_id))
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    queue_name = task_data.get("queue_name", "default")
+    await queue.delete_task(str(task_id), queue_name=queue_name)
+    return {"message": "Task deleted successfully.", "success": True}
 
 
 @router.post("/{task_id}/retry", response_model=TaskMessageResponse)

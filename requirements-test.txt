@@ -3,3 +3,4 @@ pytest-asyncio
 httpx
 pytest-mock
 fakeredis[lua]
+aiosqlite

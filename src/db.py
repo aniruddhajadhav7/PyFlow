@@ -27,7 +27,7 @@ async def init_db():
         raise
 
 
-async def get_db() -> AsyncSession:
+async def get_db():
     """Dependency for getting a database session."""
     async with AsyncSessionLocal() as session:
         yield session

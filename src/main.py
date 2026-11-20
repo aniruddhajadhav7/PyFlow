@@ -3,18 +3,16 @@ import structlog
 from src.config import settings
 from src.logger import setup_logging
 from src.queue import RedisQueue
-from src.routers import tasks, schedules
+from src.routers import tasks, schedules, dashboard
 from src.middleware import RateLimitMiddleware
+from src.db import init_db
 from contextlib import asynccontextmanager
 
-setup_logging()
 logger = structlog.get_logger(__name__)
-
-
-from src.db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()
     logger.info(
         "Application starting up", app_name=settings.app_name, debug=settings.debug
     )
@@ -31,6 +29,7 @@ app.add_middleware(RateLimitMiddleware)
 
 app.include_router(tasks.router)
 app.include_router(schedules.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/health")
