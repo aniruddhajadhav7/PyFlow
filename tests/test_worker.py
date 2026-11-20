@@ -83,3 +83,55 @@ async def test_worker_run_loop(worker, queue):
 
     # Check that dequeue was called
     assert worker.queue.dequeue.called
+
+
+@pytest.mark.asyncio
+async def test_worker_task_timeout_decorator(worker, queue):
+    @worker.task("timed_out_task", timeout=0.05)
+    async def slow_handler(payload):
+        await asyncio.sleep(0.3)
+        return "done"
+
+    task_id = await queue.enqueue("default", "timed_out_task", {"test": "timeout"})
+    task = await queue.dequeue(["default"])
+
+    await worker._process_task(task)
+
+    updated_task = await queue.get_task(task_id)
+    assert updated_task["status"] == "PENDING"
+    assert int(updated_task["retry_count"]) == 1
+    assert "exceeded execution timeout" in updated_task["error"]
+
+
+@pytest.mark.asyncio
+async def test_worker_task_timeout_runtime_override(worker, queue):
+    @worker.task("override_timeout_task")
+    async def slow_handler(payload):
+        await asyncio.sleep(0.3)
+        return "done"
+
+    task_id = await queue.enqueue("default", "override_timeout_task", {"test": "override"}, timeout=0.05)
+    task = await queue.dequeue(["default"])
+
+    await worker._process_task(task)
+
+    updated_task = await queue.get_task(task_id)
+    assert updated_task["status"] == "PENDING"
+    assert int(updated_task["retry_count"]) == 1
+    assert "exceeded execution timeout of 0.05s" in updated_task["error"]
+
+
+@pytest.mark.asyncio
+async def test_worker_task_success_within_timeout(worker, queue):
+    @worker.task("quick_task", timeout=2)
+    async def fast_handler(payload):
+        return {"status": "all_good"}
+
+    task_id = await queue.enqueue("default", "quick_task", {"test": "fast"})
+    task = await queue.dequeue(["default"])
+
+    await worker._process_task(task)
+
+    updated_task = await queue.get_task(task_id)
+    assert updated_task is None  # Deleted from Redis on success
+

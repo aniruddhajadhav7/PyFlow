@@ -3,8 +3,8 @@ import logging
 import signal
 from datetime import datetime, timezone
 import inspect
-from typing import Callable, Dict, Any
-from src.queue import RedisQueue
+from typing import Callable, Dict, Any, Optional
+from src.queue import RedisQueue, TaskTimeoutError
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,36 +17,53 @@ class Worker:
         self.shutdown_event = asyncio.Event()
         self.active_tasks = set()
         self.task_registry: Dict[str, Callable] = {}
+        self.task_timeouts: Dict[str, Optional[float]] = {}
         self.max_concurrent_tasks = max_concurrent_tasks
 
-    def task(self, task_name: str):
+    def task(self, task_name: str, timeout: Optional[float] = None):
         """
-        Decorator to register a task handler.
+        Decorator to register a task handler with an optional default timeout in seconds.
         """
         def decorator(func: Callable):
             self.task_registry[task_name] = func
+            if timeout is not None:
+                self.task_timeouts[task_name] = timeout
             return func
         return decorator
 
     async def _process_task(self, task: dict):
         """
-        Looks up the task handler and executes it.
+        Looks up the task handler and executes it within the effective timeout.
         """
         task_id = task.get("id")
         task_name = task.get("task_name")
         payload = task.get("payload", {})
         queue_name = task.get("queue_name", "default")
 
-        logger.info(f"Processing task {task_id} (type: {task_name})...")
+        # Determine effective timeout: runtime override > decorator default > global settings
+        effective_timeout = task.get("timeout")
+        if effective_timeout is None:
+            effective_timeout = self.task_timeouts.get(task_name, settings.default_task_timeout)
+
+        logger.info(
+            f"Processing task {task_id} (type: {task_name}, timeout: {effective_timeout}s)..."
+        )
         try:
             handler = self.task_registry.get(task_name)
             if not handler:
                 raise ValueError(f"No handler registered for task type: '{task_name}'")
 
-            if inspect.iscoroutinefunction(handler):
-                result = await handler(payload)
+            coro = handler(payload) if inspect.iscoroutinefunction(handler) else asyncio.to_thread(handler, payload)
+
+            if effective_timeout is not None and effective_timeout > 0:
+                try:
+                    result = await asyncio.wait_for(coro, timeout=float(effective_timeout))
+                except asyncio.TimeoutError:
+                    raise TaskTimeoutError(
+                        f"Task '{task_name}' (ID: {task_id}) exceeded execution timeout of {effective_timeout}s"
+                    )
             else:
-                result = handler(payload)
+                result = await coro
 
             # On success
             await self.queue.update_task_status(task_id, "SUCCESS", result=result, ttl=settings.task_result_ttl)

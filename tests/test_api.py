@@ -5,13 +5,14 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_submit_task(client: AsyncClient):
     payload = {"task": "from_api"}
-    response = await client.post("/tasks/", json={"task_name": "test_api", "payload": payload})
+    response = await client.post("/tasks/", json={"task_name": "test_api", "payload": payload, "timeout": 60})
 
     assert response.status_code == 201
     data = response.json()
     assert "id" in data
     assert data["payload"] == payload
     assert data["status"] == "PENDING"
+    assert data["timeout"] == 60
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,9 @@ async def submit_task(
     request: TaskSubmitRequest, queue: RedisQueue = Depends(get_queue)
 ):
     """Submit a new task to the queue."""
-    task_id = await queue.enqueue(request.queue_name, request.task_name, request.payload)
+    task_id = await queue.enqueue(
+        request.queue_name, request.task_name, request.payload, timeout=request.timeout
+    )
     task_data = await queue.get_task(task_id)
     if not task_data:
         raise HTTPException(

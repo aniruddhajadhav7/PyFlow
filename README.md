@@ -20,6 +20,7 @@ While building scalable Python web applications, integrating background task pro
 - **Periodic / Cron Tasks:** Native support for defining recurring scheduled tasks using standard cron expressions (e.g. `*/5 * * * *`) powered by atomic Redis polling.
 - **Dynamic Task Registry:** Decorator-based handler registration (`@worker.task("name")`) for scalable task routing.
 - **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns. Worker instances can dynamically poll all queues or specific named queues.
+- **Task Timeouts:** Built-in execution timeout boundaries (configurable per-task, per-decorator, or globally) to protect worker pools against deadlocks, hung network requests, or infinite loops.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
 - **Resilient Retry Mechanism:** Exponential backoff for failed tasks with automated delayed requeuing and permanent failure states.
 - **Task Result Storage & TTL Expiration:** Tasks can return results, which are stored in Redis with an automated Time-to-Live (TTL) configuration to prevent indefinite memory consumption.
