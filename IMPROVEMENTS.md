@@ -28,3 +28,8 @@ This file tracks technical additions and improvements to gradually develop PyFlo
 ## ~~8. 🖥️ Monitoring Dashboard~~ (Implemented)
 **Current State:** Real-time web monitoring dashboard served directly by FastAPI at `/dashboard`, supported by the aggregated metrics API at `/dashboard/stats`.
 - Live visual overview of queue depths, pending/delayed/DLQ counters, cron schedules, and audit history with zero external build tools required.
+
+## ~~9. ⏱️ Task Timeouts~~ (Implemented)
+**Current State:** Fully configurable task execution timeouts using non-blocking `asyncio.wait_for`.
+- Configurable per-handler via `@worker.task("name", timeout=30)`, per-submission via `POST /tasks/ {"timeout": 30}`, or globally in `Settings.default_task_timeout`.
+- Automatically raises `TaskTimeoutError`, triggers backoff retries, and prevents runaway tasks from deadlocking worker concurrency slots.

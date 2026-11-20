@@ -12,6 +12,10 @@ class TaskNotFoundError(QueueError):
     """Raised when a task is not found in the storage."""
 
 
+class TaskTimeoutError(QueueError):
+    """Raised when task execution exceeds its configured timeout."""
+
+
 class RedisQueue:
     def __init__(self, redis_url: str):
         self.redis_url = redis_url
@@ -38,6 +42,12 @@ class RedisQueue:
             except (TypeError, ValueError):
                 pass
 
+        if "timeout" in task_data and task_data["timeout"] is not None:
+            try:
+                task_data["timeout"] = float(task_data["timeout"])
+            except (ValueError, TypeError):
+                task_data["timeout"] = None
+
         return task_data
 
     async def get_known_queues(self) -> list[str]:
@@ -50,9 +60,10 @@ class RedisQueue:
         except redis.RedisError as e:
             raise QueueError(f"Redis error getting known queues: {e}")
 
-    async def enqueue(self, queue_name: str, task_name: str, task_payload: dict = None) -> str:
+    async def enqueue(self, queue_name: str, task_name: str, task_payload: dict = None, timeout: Optional[float] = None) -> str:
         """
         Enqueues a task to the specified queue and returns its unique task_id.
+        Optionally attaches a task timeout in seconds.
         """
         if task_payload is None:
             task_payload = {}
@@ -74,6 +85,8 @@ class RedisQueue:
             "status": "PENDING",
             "retry_count": 0,
         }
+        if timeout is not None:
+            task_data["timeout"] = float(timeout)
 
         try:
             import time
