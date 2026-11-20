@@ -14,4 +14,4 @@ class TaskLog(Base):
     result = Column(JSON, nullable=True)
     error = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    completed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime(timezone=True), nullable=True, default=None)

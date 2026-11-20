@@ -46,7 +46,7 @@ async def test_cancel_task(queue):
     assert success is True
 
     task = await queue.get_task(task_id)
-    assert task["status"] == "FAILED"
+    assert task["status"] == "CANCELLED"
 
     length = await queue.queue_length("default")
     assert length == 0

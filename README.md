@@ -110,10 +110,16 @@ Once the application is running, an interactive Swagger UI is available at `/doc
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Check API health and configuration. |
+| `GET` | `/dashboard` | Interactive real-time web monitoring dashboard. |
+| `GET` | `/dashboard/stats` | Aggregated queue metrics, schedules, DLQ, and system stats. |
 | `POST` | `/tasks/` | Submit a new task (requires `task_name` and `payload`, optional `queue_name`) to the queue. |
 | `GET` | `/tasks/` | List existing tasks in the queue with pagination. |
+| `GET` | `/tasks/history` | Retrieve historical audit logs (completed/permanently failed) from PostgreSQL. |
+| `GET` | `/tasks/failed` | List permanently failed tasks (DLQ) for a specific queue. |
+| `DELETE` | `/tasks/failed` | Bulk clear and purge all permanently failed tasks from a specific queue. |
 | `GET` | `/tasks/{task_id}` | Retrieve the current status and payload of a specific task. |
 | `POST` | `/tasks/{task_id}/cancel`| Cancel a pending task before execution. |
+| `DELETE` | `/tasks/{task_id}` | Permanently delete a task from the queue. |
 | `POST` | `/tasks/{task_id}/retry` | Manually trigger a retry for a permanently failed task. |
 | `POST` | `/schedules/` | Create a new recurring scheduled task (requires `cron_expression`, `task_name`). |
 | `GET` | `/schedules/` | List all active scheduled tasks. |
@@ -218,15 +224,14 @@ k6 run benchmarks/benchmark.js
 
 ## 🚧 Limitations
 
-- **In-Memory State Limits:** Because all task data and states are stored in Redis, total queue capacity is limited by available memory. It is not designed for long-term historical audit logging.
-- **No Built-in Dashboard:** There is currently no web UI to visualize queue depth, worker health, or task histories.
+- **In-Memory State Limits:** Because all task data and states are stored in Redis, total in-flight queue capacity is limited by available memory. Completed and permanently failed tasks are persisted in PostgreSQL to keep Redis lean.
 
 ---
 
 ## 🔮 Future Improvements
 
-- **PostgreSQL / Relational DB Integration**: Implement persistent storage for completed or failed tasks to enable long-term audit logging and free up Redis memory.
-- **Monitoring Dashboard**: Develop a React or Vue.js frontend for real-time visualization of queue metrics and worker metrics.
+- **Prometheus / OpenTelemetry Metrics**: Native `/metrics` exporter endpoint for scraping by Prometheus and Grafana.
+- **Priority Queuing**: Weighted or strict priority dispatch within multi-queue workers.
 
 ---
 

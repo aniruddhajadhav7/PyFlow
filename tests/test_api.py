@@ -44,10 +44,25 @@ async def test_cancel_task(client: AsyncClient):
     submit_resp = await client.post("/tasks/", json={"task_name": "test_cancel", "payload": {"task": "cancel"}})
     task_id = submit_resp.json()["id"]
 
+    response = await client.post(f"/tasks/{task_id}/cancel")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_task(client: AsyncClient):
+    submit_resp = await client.post("/tasks/", json={"task_name": "test_delete", "payload": {"task": "delete"}})
+    task_id = submit_resp.json()["id"]
+
     response = await client.delete(f"/tasks/{task_id}")
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
+
+    # Verify it's gone
+    get_resp = await client.get(f"/tasks/{task_id}")
+    assert get_resp.status_code == 404
 
 
 @pytest.mark.asyncio

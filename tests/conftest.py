@@ -1,11 +1,14 @@
 import pytest_asyncio
 import fakeredis.aioredis
 from httpx import AsyncClient, ASGITransport
+from src.logger import setup_logging
 from src.main import app
 from src.queue import RedisQueue
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.pool import StaticPool
 from src.db import Base, get_db
+
+setup_logging()
 
 # Create an in-memory SQLite engine for tests
 test_engine = create_async_engine(
