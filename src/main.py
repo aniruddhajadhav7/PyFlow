@@ -3,7 +3,7 @@ import structlog
 from src.config import settings
 from src.logger import setup_logging
 from src.queue import RedisQueue
-from src.routers import tasks, schedules, dashboard
+from src.routers import tasks, schedules, dashboard, workers
 from src.middleware import RateLimitMiddleware
 from src.db import init_db
 from contextlib import asynccontextmanager
@@ -30,6 +30,7 @@ app.add_middleware(RateLimitMiddleware)
 app.include_router(tasks.router)
 app.include_router(schedules.router)
 app.include_router(dashboard.router)
+app.include_router(workers.router)
 
 
 @app.get("/health")

@@ -1,8 +1,12 @@
 import asyncio
-import logging
-import signal
-from datetime import datetime, timezone
 import inspect
+import logging
+import os
+import signal
+import socket
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
 from src.queue import RedisQueue, TaskTimeoutError
 from src.config import settings
@@ -11,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self, redis_url: str, queues: list[str] = None, max_concurrent_tasks: int = 100):
+    def __init__(self, redis_url: str, queues: list[str] = None, max_concurrent_tasks: int = 100, worker_id: str = None):
         self.queues = queues or ["default"]
         self.queue = RedisQueue(redis_url=redis_url)
         self.shutdown_event = asyncio.Event()
@@ -19,6 +23,15 @@ class Worker:
         self.task_registry: Dict[str, Callable] = {}
         self.task_timeouts: Dict[str, Optional[float]] = {}
         self.max_concurrent_tasks = max_concurrent_tasks
+
+        # Node identification and heartbeat configuration
+        self.hostname = socket.gethostname()
+        self.pid = os.getpid()
+        self.worker_id = worker_id or f"worker-{self.hostname}-{self.pid}-{uuid.uuid4().hex[:6]}"
+        self.started_at = time.time()
+        self.heartbeat_interval = 5.0
+        self.heartbeat_ttl = 15
+        self._heartbeat_task = None
 
     def task(self, task_name: str, timeout: Optional[float] = None):
         """
@@ -128,6 +141,60 @@ class Worker:
             self.active_tasks.discard(task_obj)
             self.semaphore.release()
 
+    async def _send_heartbeat(self, status: str = "ACTIVE"):
+        """
+        Sends a heartbeat to Redis recording worker metadata and active task load.
+        """
+        now = time.time()
+        worker_key = f"worker:{self.worker_id}"
+        mapping = {
+            "worker_id": self.worker_id,
+            "hostname": self.hostname,
+            "pid": str(self.pid),
+            "queues": ",".join(self.queues),
+            "concurrency": str(self.max_concurrent_tasks),
+            "active_tasks": str(len(self.active_tasks)),
+            "started_at": str(self.started_at),
+            "last_heartbeat": str(now),
+            "status": status,
+        }
+        try:
+            async with self.queue.redis_client.pipeline(transaction=True) as pipe:
+                pipe.sadd("workers:active", self.worker_id)
+                pipe.hset(worker_key, mapping=mapping)
+                pipe.expire(worker_key, self.heartbeat_ttl)
+                await pipe.execute()
+        except Exception as e:
+            logger.warning(f"Failed to send heartbeat for worker {self.worker_id}: {e}")
+
+    async def _heartbeat_loop(self):
+        """
+        Background loop to send periodic heartbeats while the worker is running.
+        """
+        try:
+            while not self.shutdown_event.is_set():
+                await self._send_heartbeat(status="ACTIVE")
+                try:
+                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=self.heartbeat_interval)
+                except asyncio.TimeoutError:
+                    pass
+        except asyncio.CancelledError:
+            pass
+
+    async def _deregister(self):
+        """
+        Removes the worker registration and heartbeat key from Redis on shutdown.
+        """
+        worker_key = f"worker:{self.worker_id}"
+        try:
+            async with self.queue.redis_client.pipeline(transaction=True) as pipe:
+                pipe.srem("workers:active", self.worker_id)
+                pipe.delete(worker_key)
+                await pipe.execute()
+            logger.info(f"Worker {self.worker_id} successfully deregistered.")
+        except Exception as e:
+            logger.warning(f"Failed to deregister worker {self.worker_id}: {e}")
+
     async def _get_queues_to_poll(self) -> list[str]:
         """Resolve which queues to poll. If '*' is specified, fetch known queues."""
         if "*" in self.queues:
@@ -147,6 +214,9 @@ class Worker:
             loop.add_signal_handler(sig, self.shutdown_event.set)
 
         self.semaphore = asyncio.Semaphore(self.max_concurrent_tasks)
+
+        # Start periodic background heartbeat task
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         try:
             while not self.shutdown_event.is_set():
@@ -178,12 +248,17 @@ class Worker:
                         pass
         finally:
             logger.info("Worker shutting down...")
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+            await self._send_heartbeat(status="SHUTTING_DOWN")
+
             if self.active_tasks:
                 logger.info(
                     f"Waiting for {len(self.active_tasks)} active tasks to finish..."
                 )
                 await asyncio.gather(*self.active_tasks, return_exceptions=True)
 
+            await self._deregister()
             await self.queue.close()
             logger.info("Worker shutdown complete.")
 

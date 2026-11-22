@@ -33,3 +33,10 @@ This file tracks technical additions and improvements to gradually develop PyFlo
 **Current State:** Fully configurable task execution timeouts using non-blocking `asyncio.wait_for`.
 - Configurable per-handler via `@worker.task("name", timeout=30)`, per-submission via `POST /tasks/ {"timeout": 30}`, or globally in `Settings.default_task_timeout`.
 - Automatically raises `TaskTimeoutError`, triggers backoff retries, and prevents runaway tasks from deadlocking worker concurrency slots.
+
+## ~~10. 💓 Worker Heartbeat, Auto-Registration & Node Discovery~~ (Implemented)
+**Current State:** Fully distributed worker node heartbeat, dynamic cluster registry, and live health monitoring.
+- Background worker heartbeat loop sending periodic telemetry to Redis (`workers:active` and `worker:{id}`).
+- Tracks worker ID, hostname, PID, assigned queues, concurrency limits, active task counts, and node uptime.
+- Exposes `GET /workers` and `GET /workers/{worker_id}` management API.
+- Embedded "Worker Nodes" live monitoring grid in `/dashboard` with auto-pruning of dead/stale nodes.
