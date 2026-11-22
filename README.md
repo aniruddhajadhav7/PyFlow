@@ -20,6 +20,7 @@ While building scalable Python web applications, integrating background task pro
 - **Periodic / Cron Tasks:** Native support for defining recurring scheduled tasks using standard cron expressions (e.g. `*/5 * * * *`) powered by atomic Redis polling.
 - **Dynamic Task Registry:** Decorator-based handler registration (`@worker.task("name")`) for scalable task routing.
 - **Asynchronous Workers:** Dedicated, non-blocking async loops for processing background tasks, handling failures, and graceful shutdowns. Worker instances can dynamically poll all queues or specific named queues.
+- **Worker Heartbeat & Discovery:** Automated node registration with periodic heartbeats, tracking active node capacity, process telemetry, and live status across distributed clusters.
 - **Task Timeouts:** Built-in execution timeout boundaries (configurable per-task, per-decorator, or globally) to protect worker pools against deadlocks, hung network requests, or infinite loops.
 - **Advanced Rate Limiting:** Lua-script-backed Token Bucket and pipeline-backed Sliding Window Log algorithms.
 - **Resilient Retry Mechanism:** Exponential backoff for failed tasks with automated delayed requeuing and permanent failure states.
@@ -113,6 +114,8 @@ Once the application is running, an interactive Swagger UI is available at `/doc
 | `GET` | `/health` | Check API health and configuration. |
 | `GET` | `/dashboard` | Interactive real-time web monitoring dashboard. |
 | `GET` | `/dashboard/stats` | Aggregated queue metrics, schedules, DLQ, and system stats. |
+| `GET` | `/workers` | List all active worker nodes, capacity, and current task loads. |
+| `GET` | `/workers/{worker_id}` | Retrieve live health and workload metrics for a specific worker node. |
 | `POST` | `/tasks/` | Submit a new task (requires `task_name` and `payload`, optional `queue_name`) to the queue. |
 | `GET` | `/tasks/` | List existing tasks in the queue with pagination. |
 | `GET` | `/tasks/history` | Retrieve historical audit logs (completed/permanently failed) from PostgreSQL. |

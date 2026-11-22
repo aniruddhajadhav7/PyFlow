@@ -110,7 +110,12 @@ async def dashboard_view():
   <!-- Main Content -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
     <!-- Stat Cards Row -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
+      <div class="bg-slate-900/70 border border-slate-800 p-4 rounded-xl">
+        <p class="text-xs uppercase tracking-wider text-slate-400 font-medium">Active Workers</p>
+        <p id="stat-workers" class="text-2xl font-bold text-cyan-400 mt-1">-</p>
+        <div id="stat-workers-detail" class="text-[11px] text-slate-500 mt-1">Cluster Nodes</div>
+      </div>
       <div class="bg-slate-900/70 border border-slate-800 p-4 rounded-xl">
         <p class="text-xs uppercase tracking-wider text-slate-400 font-medium">Pending Tasks</p>
         <p id="stat-pending" class="text-2xl font-bold text-white mt-1">-</p>
@@ -135,6 +140,33 @@ async def dashboard_view():
         <p class="text-xs uppercase tracking-wider text-slate-400 font-medium">Redis Memory</p>
         <p id="stat-redis-mem" class="text-2xl font-bold text-emerald-400 mt-1">-</p>
         <div id="stat-redis-ver" class="text-[11px] text-slate-500 mt-1">Redis Broker</div>
+      </div>
+    </div>
+
+    <!-- Active Worker Nodes Section -->
+    <div class="bg-slate-900/70 border border-slate-800 rounded-xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <h2 class="font-semibold text-slate-200">Worker Nodes</h2>
+          <span id="workers-count-badge" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">0 active</span>
+        </div>
+        <span class="text-xs text-slate-400">Heartbeat monitoring & load status</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-950/60 text-slate-400 text-xs uppercase font-medium border-b border-slate-800/80">
+            <tr>
+              <th class="px-5 py-3">Worker Node</th>
+              <th class="px-5 py-3">Host / PID</th>
+              <th class="px-5 py-3">Queues</th>
+              <th class="px-5 py-3 text-center">Load (Active / Capacity)</th>
+              <th class="px-5 py-3 text-right">Uptime</th>
+            </tr>
+          </thead>
+          <tbody id="workers-table-body" class="divide-y divide-slate-800/60">
+            <tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">Scanning for active workers...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -240,12 +272,60 @@ async def dashboard_view():
         const data = await res.json();
 
         // Cards
+        const workers = data.workers || [];
+        document.getElementById('stat-workers').innerText = `${workers.length}`;
+        const totalCapacity = data.totals.total_worker_capacity || 0;
+        const totalActive = data.totals.total_active_worker_tasks || 0;
+        document.getElementById('stat-workers-detail').innerText = `${totalActive} / ${totalCapacity} active slots`;
+
         document.getElementById('stat-pending').innerText = data.totals.pending.toLocaleString();
         document.getElementById('stat-delayed').innerText = data.totals.delayed.toLocaleString();
         document.getElementById('stat-failed').innerText = data.totals.failed.toLocaleString();
         document.getElementById('stat-schedules').innerText = data.totals.schedules.toLocaleString();
         document.getElementById('stat-redis-mem').innerText = data.redis.used_memory_human || 'N/A';
         document.getElementById('stat-redis-ver').innerText = `Redis v${data.redis.version || '?'}`;
+
+        // Workers Table
+        document.getElementById('workers-count-badge').innerText = `${workers.length} nodes`;
+        const workersBody = document.getElementById('workers-table-body');
+        if (workers.length === 0) {
+          workersBody.innerHTML = `<tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">
+            <span class="inline-flex items-center space-x-1.5 text-amber-400 text-xs">
+              <span>⚠️</span>
+              <span>No worker nodes running. Start a worker with: <code class="bg-slate-800 px-2 py-0.5 rounded text-indigo-300">python -m src.worker</code></span>
+            </span>
+          </td></tr>`;
+        } else {
+          workersBody.innerHTML = workers.map(w => {
+            const usagePct = w.concurrency > 0 ? Math.round((w.active_tasks / w.concurrency) * 100) : 0;
+            const barColor = usagePct > 80 ? 'bg-rose-500' : (usagePct > 40 ? 'bg-amber-500' : 'bg-emerald-500');
+            const queuesBadges = w.queues.map(q => `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px] font-mono mr-1">${q}</span>`).join('');
+            return `
+              <tr class="hover:bg-slate-800/30 transition">
+                <td class="px-5 py-3 font-medium text-slate-200">
+                  <div class="flex items-center space-x-2">
+                    <span class="relative flex h-2 w-2">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span class="font-mono text-xs text-indigo-300">${w.worker_id}</span>
+                  </div>
+                </td>
+                <td class="px-5 py-3 text-slate-400 text-xs">${w.hostname} (PID: ${w.pid})</td>
+                <td class="px-5 py-3">${queuesBadges}</td>
+                <td class="px-5 py-3 text-center">
+                  <div class="inline-flex flex-col items-center w-36">
+                    <span class="text-xs font-semibold text-slate-300">${w.active_tasks} / ${w.concurrency} (${usagePct}%)</span>
+                    <div class="w-full bg-slate-800 rounded-full h-1.5 mt-1 overflow-hidden">
+                      <div class="${barColor} h-1.5 rounded-full" style="width: ${Math.max(4, usagePct)}%"></div>
+                    </div>
+                  </div>
+                </td>
+                <td class="px-5 py-3 text-right text-xs text-slate-400">${Math.round(w.uptime_seconds)}s</td>
+              </tr>
+            `;
+          }).join('');
+        }
 
         // Queues Table
         const queuesList = Object.entries(data.queues || {});

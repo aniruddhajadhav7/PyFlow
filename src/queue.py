@@ -663,6 +663,10 @@ class RedisQueue:
             except Exception:
                 pass
 
+            active_workers = await self.get_active_workers()
+            total_worker_capacity = sum(w["concurrency"] for w in active_workers)
+            total_active_worker_tasks = sum(w["active_tasks"] for w in active_workers)
+
             return {
                 "queues": queues_stats,
                 "totals": {
@@ -671,8 +675,60 @@ class RedisQueue:
                     "failed": total_failed,
                     "schedules": total_schedules,
                     "registered_tasks": total_created_tasks,
+                    "active_workers": len(active_workers),
+                    "total_worker_capacity": total_worker_capacity,
+                    "total_active_worker_tasks": total_active_worker_tasks,
                 },
+                "workers": active_workers,
                 "redis": redis_info,
             }
         except redis.RedisError as e:
             raise QueueError(f"Redis error fetching stats: {e}")
+
+    async def get_active_workers(self) -> list[Dict[str, Any]]:
+        """
+        Retrieves all currently active registered workers with their health metrics.
+        Prunes dead workers from the 'workers:active' set whose heartbeat key expired.
+        """
+        try:
+            worker_ids = await self.redis_client.smembers("workers:active")
+            if not worker_ids:
+                return []
+
+            workers = []
+            stale_ids = []
+
+            async with self.redis_client.pipeline(transaction=False) as pipe:
+                for wid in worker_ids:
+                    pipe.hgetall(f"worker:{wid}")
+                worker_data_list = await pipe.execute()
+
+            import time
+            now = time.time()
+
+            for wid, wdata in zip(worker_ids, worker_data_list):
+                if not wdata:
+                    stale_ids.append(wid)
+                else:
+                    started_at = float(wdata.get("started_at", now))
+                    last_heartbeat = float(wdata.get("last_heartbeat", now))
+                    workers.append({
+                        "worker_id": wdata.get("worker_id", wid),
+                        "hostname": wdata.get("hostname", "unknown"),
+                        "pid": int(wdata.get("pid", 0)),
+                        "queues": [q.strip() for q in wdata.get("queues", "default").split(",") if q.strip()],
+                        "concurrency": int(wdata.get("concurrency", 100)),
+                        "active_tasks": int(wdata.get("active_tasks", 0)),
+                        "started_at": started_at,
+                        "uptime_seconds": round(max(0.0, now - started_at), 1),
+                        "last_heartbeat": last_heartbeat,
+                        "status": wdata.get("status", "ACTIVE"),
+                    })
+
+            # Clean up stale worker IDs in background
+            if stale_ids:
+                await self.redis_client.srem("workers:active", *stale_ids)
+
+            return sorted(workers, key=lambda w: w["worker_id"])
+        except redis.RedisError as e:
+            raise QueueError(f"Redis error fetching active workers: {e}")
